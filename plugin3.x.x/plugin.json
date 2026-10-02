@@ -1,0 +1,15 @@
+{
+    "id": "scanCam",
+    "name": "scanCam",
+    "author": "Stuartofmt",
+    "version": "1.0",
+    "license": "GPL-2.0-or-later",
+    "homepage": "https://github.com/stuartofmt",
+	"sbcRequired": true,
+	"sbcDsfVersion": "3",
+	"sbcExecutable": "scanCam.py",
+	"sbcOutputRedirected": false,
+	"sbcPermissions": ["networkAccess", "webcamAccess", "fileSystemAccess"],
+	"sbcPackageDependencies": ["python3", "python3-libcamera", "python3-picamera2","v4l-utils","ffmpeg"],
+	"sbcPythonDependencies": ["--verbose","requirements.txt"]
+ }

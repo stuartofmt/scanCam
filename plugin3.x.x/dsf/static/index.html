@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera Streams</title>
+
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+
+    <div class="container">
+
+        <header class="page-header">
+            <h1>Camera Streams</h1>
+        </header>
+
+        <div id="empty-state" class="camera-card empty-state" hidden>No cameras detected.</div>
+
+        <div id="camera-view" class="camera-view" hidden>
+
+            <div class="settings-panel">
+
+                <div class="camera-select">
+                    <label for="camera-select">Camera</label>
+                    <select id="camera-select"></select>
+                    <span id="camera-type" class="camera-type"></span>
+                </div>
+
+                <table class="settings-table">
+                    <thead>
+                        <tr>
+                            <th>Setting</th>
+                            <th>Min / Max</th>
+                            <th>Default</th>
+                            <th>Current</th>
+                        </tr>
+                    </thead>
+                    <tbody id="settings-body"></tbody>
+                </table>
+
+                <p id="settings-status" class="settings-status" aria-live="polite"></p>
+
+            </div>
+
+            <div class="camera-card camera-display">
+                <img id="camera-stream" alt="">
+                <div class="camera-links">
+                    <a id="stream-link" target="_blank" rel="noopener noreferrer"></a>
+                    <a id="snapshot-link" target="_blank" rel="noopener noreferrer"></a>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script src="/static/index.js"></script>
+
+</body>
+</html>
