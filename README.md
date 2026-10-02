@@ -7,12 +7,14 @@ View the USB and Raspberry Pi cameras attached to a Linux machine in a web page,
 ```bash
 unzip scanCam-<version>.zip
 cd scanCam
-./install.sh
+python3 install.py
 ```
 
-`install.sh` installs any missing system packages (`v4l-utils`, and `python3-picamera2` / `python3-libcamera` on a Raspberry Pi) using `sudo apt-get`, then creates a Python venv in the `scanCam` folder.
+`install.py` asks which directory to install scanCam into (default `~/scanCam`; press Enter to accept it) and copies `README.md` and the `code` folder there. It then installs any missing system packages (`v4l-utils`, and `python3-picamera2` / `python3-libcamera` on a Raspberry Pi) using `sudo apt-get`, then creates a Python venv and a `run.sh` launcher in that directory. Running it again updates the program files and recreates the venv.
 
 ## Run
+
+From the install directory:
 
 ```bash
 ./run.sh

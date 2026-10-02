@@ -1,8 +1,8 @@
 """
 scanCam - view and adjust USB and Pi cameras from a web page.
 
-Set up the venv once with ./createVenv.sh, then run:
-	venv/bin/python scanCam.py
+Set up the venv once with python3 install.py, then run:
+	./run.sh  (or venv/bin/python code/scanCam.py)
 """
 
 # This is to supress the noisy libcam

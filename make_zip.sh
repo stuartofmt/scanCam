@@ -1,11 +1,12 @@
 #!/bin/bash
-# Build dist/scanCam-<version>.zip, which unzips to a scanCam/ folder ready for ./install.sh.
+# Build dist/scanCam-<version>.zip, which unzips to a scanCam/ folder holding
+# README.md, install.py and the program in code/.
 set -e
 cd "$(dirname "$0")"
 
-version=$(grep -oP "progVersion = '\K[^']+" scanCam.py)
+version=$(grep -oP "progVersion = '\K[^']+" code/scanCam.py)
 out="$PWD/dist/scanCam-$version.zip"
-files="*.py requirements.txt static README.md install.sh createVenv.sh run.sh"
+files="README.md install.py code"
 
 staging=$(mktemp -d)
 trap 'rm -rf "$staging"' EXIT
