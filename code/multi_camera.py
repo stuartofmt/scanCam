@@ -2,7 +2,7 @@
 multi_camera.py
 
 Background multi-camera capture manager using OpenCV.
-Optimized for Linux webcam streaming.
+USB cameras are opened with V4L2 on Linux and DirectShow on Windows.
 """
 
 import cv2
@@ -11,6 +11,7 @@ import threading
 
 from typing import Dict, Optional
 
+from defaults import IS_WINDOWS
 
 
 # Accept a frame slightly early so source jitter doesn't halve the output rate.
@@ -143,7 +144,7 @@ class ClientTracking:
 
 class CameraStream(ClientTracking):
 	"""
-	Single background USB (V4L2) camera stream.
+	Single background USB camera stream (V4L2, or DirectShow on Windows).
 	"""
 
 	def __init__(
@@ -196,9 +197,13 @@ class CameraStream(ClientTracking):
 		if self.running:
 			return
 
-		print(f"Opening {self.source} using V4L2")
-
-		self.capture = cv2.VideoCapture(self.source, cv2.CAP_V4L2)
+		if IS_WINDOWS:
+			# DirectShow cameras are opened by index (see dshow.py).
+			print(f"Opening camera {self.source} using DirectShow")
+			self.capture = cv2.VideoCapture(int(self.source), cv2.CAP_DSHOW)
+		else:
+			print(f"Opening {self.source} using V4L2")
+			self.capture = cv2.VideoCapture(self.source, cv2.CAP_V4L2)
 
 		if not self.capture.isOpened():
 

@@ -1,7 +1,11 @@
 
 
+import sys
 from enum import Enum
 from pathlib import Path
+
+# On Windows, USB cameras are reached through DirectShow (dshow.py) instead of V4L2.
+IS_WINDOWS = sys.platform == "win32"
 
 # ============================================================
 # Paths

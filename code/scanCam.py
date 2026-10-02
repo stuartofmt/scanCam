@@ -1,8 +1,9 @@
 """
 scanCam - view and adjust USB and Pi cameras from a web page.
 
-Set up the venv once with python3 install.py, then run:
+Set up the venv once with install.py, then run:
 	./run.sh  (or venv/bin/python code/scanCam.py)
+	run.bat on Windows
 """
 
 # This is to supress the noisy libcam
@@ -21,6 +22,7 @@ import webbrowser
 
 from werkzeug.serving import make_server
 
+from defaults import IS_WINDOWS
 from routes import app, add_camera, set_camera_settings
 
 from get_config import (get_installed_cameras, get_detected_cameras, configure_cameras,
@@ -61,13 +63,14 @@ def find_port(start_port=17800, max_tries=100):
 
 
 def open_browser(url):
-	#  Only with a desktop - otherwise (e.g. run by DSF) a text browser could take over the terminal
-	if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+	#  Only with a desktop - otherwise (e.g. run by DSF) a text browser could take over the terminal.
+	#  Windows always has one.
+	if not IS_WINDOWS and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
 		print(f'''No display - not opening {url} in a browser''')
 		return
 	try:
 		#  xdg-open uses the desktop's default browser; webbrowser has its own order of preference
-		if shutil.which('xdg-open'):
+		if not IS_WINDOWS and shutil.which('xdg-open'):
 			subprocess.Popen(['xdg-open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 		elif not webbrowser.open(url):
 			print(f'''No browser available to open {url}''')

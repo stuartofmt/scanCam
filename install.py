@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 One-time setup for scanCam: asks for an install directory, copies the
-program there, then installs system packages and creates the Python venv.
+program there, then installs system packages (Linux) and creates the Python venv.
 
-Run from anywhere with: python3 install.py
+Run from anywhere with: python3 install.py  (on Windows: py install.py)
 Running it again updates the program files and recreates the venv.
 """
 import shutil
@@ -11,11 +11,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+IS_WINDOWS = sys.platform == 'win32'
+
 here = Path(__file__).resolve().parent
 default_target = Path.home() / 'scanCam'
-# Copied into the install directory; the venv and run.sh are created there.
+# Copied into the install directory; the venv and launcher are created there.
 program_files = ['README.md', 'code']
-run_script = """#!/bin/bash
+
+if IS_WINDOWS:
+	launcher_name = 'run.bat'
+	launcher_script = """@echo off
+rem Start scanCam using its venv (recreate it with install.py).
+cd /d "%~dp0"
+venv\\Scripts\\python.exe -u code\\scanCam.py %*
+"""
+else:
+	launcher_name = 'run.sh'
+	launcher_script = """#!/bin/bash
 # Start scanCam using its venv (recreate it with python3 install.py).
 cd "$(dirname "$0")"
 exec venv/bin/python -u code/scanCam.py "$@"
@@ -42,9 +54,9 @@ def copy_program(target: Path):
 					ignore=shutil.ignore_patterns('__pycache__'))
 			else:
 				shutil.copy2(source, target / name)
-	run = target / 'run.sh'
-	run.write_text(run_script)
-	run.chmod(0o755)
+	launcher = target / launcher_name
+	launcher.write_text(launcher_script)
+	launcher.chmod(0o755)
 
 
 def is_raspberry_pi() -> bool:
@@ -60,6 +72,9 @@ def is_installed(package: str) -> bool:
 
 
 def install_system_packages():
+	# Windows needs nothing beyond Python; its camera support (pygrabber) comes from pip.
+	if IS_WINDOWS:
+		return
 	packages = ['python3-venv', 'v4l-utils']
 	# Pi cameras need picamera2 / libcamera, which come from apt (not pip).
 	if is_raspberry_pi():
@@ -73,13 +88,20 @@ def install_system_packages():
 
 
 def create_venv(target: Path):
-	# --system-site-packages lets the venv use picamera2 / libcamera installed with apt.
 	# Use the base Python, since sys.executable may be inside the venv being deleted.
-	python = Path(sys.base_prefix) / 'bin' / 'python3'
 	venv = target / 'venv'
+	if IS_WINDOWS:
+		python = Path(sys.base_prefix) / 'python.exe'
+		venv_python = venv / 'Scripts' / 'python.exe'
+		venv_options = []
+	else:
+		python = Path(sys.base_prefix) / 'bin' / 'python3'
+		venv_python = venv / 'bin' / 'python'
+		# Lets the venv use picamera2 / libcamera installed with apt.
+		venv_options = ['--system-site-packages']
 	shutil.rmtree(venv, ignore_errors=True)
-	subprocess.run([str(python), '-m', 'venv', '--system-site-packages', str(venv)], check=True)
-	subprocess.run([str(venv / 'bin' / 'pip'), 'install', '-r', str(target / 'code' / 'requirements.txt')], check=True)
+	subprocess.run([str(python), '-m', 'venv', *venv_options, str(venv)], check=True)
+	subprocess.run([str(venv_python), '-m', 'pip', 'install', '-r', str(target / 'code' / 'requirements.txt')], check=True)
 	print('venv ready')
 
 
@@ -94,7 +116,7 @@ def main():
 	except OSError as e:
 		sys.exit(f"Install failed: {e}")
 	print()
-	print(f"scanCam is installed in {target}. Start it with: {target / 'run.sh'}")
+	print(f"scanCam is installed in {target}. Start it with: {target / launcher_name}")
 
 
 if __name__ == '__main__':

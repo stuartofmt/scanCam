@@ -1,5 +1,4 @@
 import errno
-import fcntl
 import os
 import struct
 import re
@@ -8,7 +7,12 @@ import glob
 import copy
 from typing import Dict, List, Optional, Tuple
 
-from defaults import DefaultCameraSettings, AllowedOptions
+from defaults import DefaultCameraSettings, AllowedOptions, IS_WINDOWS
+
+if IS_WINDOWS:
+	import dshow
+else:
+	import fcntl
 
 # --- CSI cameras via picamera2 ---
 try:
@@ -66,7 +70,10 @@ def _parse_list_ctrls(device_path):
 	for every control the driver reports.
 	"""
 	if device_path not in _USB_CTRLS_CACHE:
-		_USB_CTRLS_CACHE[device_path] = _query_list_ctrls(device_path)
+		if IS_WINDOWS:
+			_USB_CTRLS_CACHE[device_path] = dshow.list_controls(device_path)
+		else:
+			_USB_CTRLS_CACHE[device_path] = _query_list_ctrls(device_path)
 	return _USB_CTRLS_CACHE[device_path]
 
 
@@ -77,6 +84,8 @@ def _set_usb_ctrls(device_path, values):
 	"""
 	if not values:
 		return set()
+	if IS_WINDOWS:
+		return dshow.set_controls(device_path, values)
 
 	ctrl_arg = ",".join(f"{name}={value}" for name, value in values.items())
 	try:
@@ -190,7 +199,11 @@ def _usb_camera_in_use(device_path):
 	only the stream is exclusive, and it belongs to whichever process first
 	requested buffers. Requesting a buffer here fails with EBUSY while another
 	process holds the stream. The buffer is released again straight away.
+
+	DirectShow has no such check; on Windows a busy camera fails when it is opened.
 	"""
+	if IS_WINDOWS:
+		return False
 	fd = os.open(device_path, os.O_RDWR | os.O_NONBLOCK)
 	try:
 		request = struct.pack("5I", 1, _V4L2_BUF_TYPE_VIDEO_CAPTURE, _V4L2_MEMORY_MMAP, 0, 0)
@@ -448,6 +461,18 @@ def _parse_formats(output: str) -> "dict[str, dict[Tuple[int, int], List[float]]
 	return formats
 
 
+def _usb_formats(source) -> "dict[str, dict[Tuple[int, int], List[float]]]":
+	"""{format: {(width, height): [fps, ...]}} a USB camera supports, or {} if it can't be queried."""
+	if IS_WINDOWS:
+		try:
+			return dshow.list_formats(source)
+		except Exception as exc:
+			print(f"Could not query formats of camera {source}: {exc}")
+			return {}
+	output = _run_v4l2_ctl(source)
+	return _parse_formats(output) if output else {}
+
+
 def _normalize_format(requested_format: str) -> str:
 	upper = requested_format.upper()
 	return FORMAT_ALIASES.get(upper, upper)
@@ -531,15 +556,10 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 		_add_applied_options(cam, (applied_options or {}).get(cam_name))
 		try:
 			source = cam.get("source")
-			output = _run_v4l2_ctl(source)
-			if output is None:
-				print(f"[{cam_name}] Skipping format validation for {source}")
-				continue
-
-			formats = _parse_formats(output)
+			formats = _usb_formats(source)
 
 			if not formats:
-				print(f"[{cam_name}] No formats parsed for {source}; skipping")
+				print(f"[{cam_name}] No formats found for {source}; skipping format validation")
 				continue
 		except Exception as e:
 			print(f'Format parsing{e}')
@@ -865,9 +885,17 @@ def highlight_print(msg):
 
 
 
-def find_usb_cameras():
+def _find_usb_devices_windows():
+	"""{source: label} for every DirectShow camera, e.g. {"0": "0 (HD Webcam)"}."""
+	try:
+		return {source: f"{source} ({name})" for source, name in dshow.list_cameras()}
+	except Exception as e:
+		raise Exception(f"Error listing DirectShow cameras - {e}")
+
+
+def _find_usb_devices_linux():
 	"""
-	Return a list of /dev/videoN paths for USB cameras that actually
+	{source: label} for the /dev/videoN paths of USB cameras that actually
 	support video capture (filters out metadata-only nodes by
 	checking reported capabilities, not by even/odd guessing).
 	"""
@@ -904,12 +932,21 @@ def find_usb_cameras():
 	except Exception as e:
 		raise Exception(f"Error checking USB camera capabilities - {e}")
 
+	return {node: node for node in usb_devices}
+
+
+def find_usb_cameras():
+	"""
+	Return the sources of the USB cameras: /dev/videoN paths on Linux,
+	DirectShow device indexes ("0", "1", ...) on Windows.
+	"""
+	usb_devices = _find_usb_devices_windows() if IS_WINDOWS else _find_usb_devices_linux()
+
 	camera_results = []
 	if usb_devices:
-		# --- USB cameras via /dev/video* (capability-checked) ---
 		camera_results.append("USB camera(s) found with these options:")
-		for dev in usb_devices:
-			camera_results.append(f"\n-- {dev}")
+		for dev, label in usb_devices.items():
+			camera_results.append(f"\n-- {label}")
 			try:
 				camera_options = get_camera_options_usb(f"USB-{dev}", dev)
 				if camera_options.get(dev):
@@ -927,7 +964,7 @@ def find_usb_cameras():
 
 	highlight_print(camera_results)
 
-	return usb_devices
+	return list(usb_devices)
 
 
 def find_pi_cameras():
@@ -1179,8 +1216,7 @@ def _usb_setting_choices(cam):
 	streams in: every width, the heights offered at the current width and the
 	rates offered at the current resolution.
 	"""
-	output = _run_v4l2_ctl(cam["source"])
-	resolutions = (_parse_formats(output) if output else {}).get(cam.get("format"))
+	resolutions = _usb_formats(cam["source"]).get(cam.get("format"))
 	if not resolutions:
 		return {}
 	width, height = int(cam["width"]), int(cam["height"])
@@ -1292,8 +1328,7 @@ def _usb_resolution_with(cam, setting, value):
 	changed on its own, pick a resolution with that dimension, keeping the
 	other dimension as close as possible to its current value.
 	"""
-	output = _run_v4l2_ctl(cam["source"])
-	resolutions = (_parse_formats(output) if output else {}).get(cam.get("format"), {})
+	resolutions = _usb_formats(cam["source"]).get(cam.get("format"), {})
 	index, other = (0, 1) if setting == "width" else (1, 0)
 	other_setting = "height" if setting == "width" else "width"
 	matching = [wh for wh in resolutions if wh[index] == value]
