@@ -1,10 +1,8 @@
 """
-The she-bang is not required if called with fully qualified paths
-The plugin manager does this.  Otherwise use ...
-Standard python install e.g.
-#!/usr/bin/python3 -u
-Venv python install e.g.
-#! <path-to-virtual-environment/bin>python -u
+scanCam - view and adjust USB and Pi cameras from a web page.
+
+Set up the venv once with ./createVenv.sh, then run:
+	venv/bin/python scanCam.py
 """
 
 # This is to supress the noisy libcam

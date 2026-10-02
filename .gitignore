@@ -11,7 +11,6 @@ data/
 .vscode/
 .DS_Store
 not-in-use/
-*.sh
 *.config
 *.log
 callgraph
@@ -20,3 +19,4 @@ call_graph_pyan.py
 x*.py
 *.copy
 *.claude
+dist/

@@ -11,7 +11,11 @@ from typing import Dict, List, Optional, Tuple
 from defaults import DefaultCameraSettings, AllowedOptions
 
 # --- CSI cameras via picamera2 ---
-from picamera2 import Picamera2
+try:
+	from picamera2 import Picamera2
+except ImportError:
+	# Not a Raspberry Pi (picamera2 is installed with apt); only USB cameras are used.
+	Picamera2 = None
 
 
 # ---------------------------------
@@ -972,6 +976,9 @@ def get_pi_camera_indices():
 	libcamera also lists USB cameras (uvcvideo pipeline), so only cameras
 	on a Raspberry Pi pipeline (rpi/vc4, rpi/pisp) are kept.
 	"""
+	if Picamera2 is None:
+		return []
+
 	# global_camera_info is sorted by Id, so its order is not the camera number; 'Num' is.
 	# It omits PipelineHandler, so read that from the libcamera camera itself.
 	libcamera_cameras = Picamera2._cm.cms.cameras
