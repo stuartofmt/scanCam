@@ -15,17 +15,16 @@ os.environ["LIBCAMERA_LOG_LEVELS"] = "*:ERROR"
 from pathlib import Path
 import sys
 
-import httpx
-import threading
-import time
-import uvicorn
+import logging
 import socket
 import signal
 import shutil
 import subprocess
 import webbrowser
 
-from routes import app, start_cameras, set_camera_settings
+from werkzeug.serving import make_server
+
+from routes import app, add_camera, start_cameras, set_camera_settings
 
 from logger_module import setup_log
 
@@ -105,6 +104,8 @@ if __name__ == "__main__":
 		sys.exit(1)
 
 	from logger_module import logger # Need to import after setup_logging is called
+	# Werkzeug logs every request (each stream and snapshot); only show its problems
+	logging.getLogger('werkzeug').setLevel(logging.WARNING)
 	logger.info(f'''Log file for {progName} -- {progVersion}''')
 
 	from get_config import (get_installed_cameras, get_detected_cameras, configure_cameras,
@@ -128,37 +129,13 @@ if __name__ == "__main__":
 		logger.warning(f'Index page will not show camera settings - {e}')
 		set_camera_settings(configured_cameras, {})
 
-	# Start uvicorn in a background thread
-	def run_server():
-		uvicorn.run(
-			app,
-			host=this_ip_address,
-			port=PORT,
-			reload=False,
-			log_config=None
-		)
-
-	server_thread = threading.Thread(target=run_server, daemon=True)
-	server_thread.start()
-
-	logger.info("Waiting for server to be ready")
-	time.sleep(2)
-
-	with httpx.Client() as client:
-			# Use case sensitive order based on keys		
-			for camera_name, camera_settings in sorted(configured_cameras.items()):
-				try:
-					camera_payload = camera_settings
-					response = client.post(
-						f"http://{this_ip_address}:{PORT}/api/add-camera",
-						json=camera_payload,
-					)
-					if response.is_success and response.json().get("status") == "success":
-						logger.info(f"Added {camera_name} with source '{camera_payload['source']}'")
-					else:
-						logger.error(f"Error adding camera {camera_name}: {response.text}")
-				except Exception as e:
-					logger.error(f"Error adding camera {camera_name}: {e}")
+	# Use case sensitive order based on keys
+	for camera_name, camera_settings in sorted(configured_cameras.items()):
+		try:
+			add_camera(camera_settings)
+			logger.info(f"Added {camera_name} with source '{camera_settings['source']}'")
+		except Exception as e:
+			logger.error(f"Error adding camera {camera_name}: {e}")
 
 	# Start all cameras after registration
 	try:
@@ -167,10 +144,16 @@ if __name__ == "__main__":
 		logger.critical(f"{e}")
 		force_quit(1)
 
+	# Each request (e.g. each open stream) is handled in its own thread
+	try:
+		server = make_server(this_ip_address, PORT, app, threaded=True)
+	except Exception as e:
+		logger.critical(f'Could not start the web server on port {PORT} - {e}')
+		force_quit(1)
+
 	logger.info('-------------------------------------------------------\n')
 	logger.info(f"View cameras at http://{this_ip_address}:{PORT}\n")
 
 	open_browser(f"http://{this_ip_address}:{PORT}")
 
-	# Keep the main thread alive
-	server_thread.join()
+	server.serve_forever()

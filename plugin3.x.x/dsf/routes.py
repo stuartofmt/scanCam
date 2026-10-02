@@ -1,16 +1,10 @@
-import asyncio
 import copy
 import threading
 import time
 from typing import Optional
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, model_validator
-from starlette.requests import Request
-from starlette.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
+from flask import Flask, Response, request, send_from_directory
+from pydantic import BaseModel, ValidationError, model_validator
 
 from defaults import (
     STATIC_DIR,
@@ -71,32 +65,39 @@ class CameraConfig(BaseModel):
 
 SNAPSHOT_TIMEOUT_SEC = 3.0
 
+NO_CACHE = "no-store, no-cache, must-revalidate, max-age=0"
+
 # ============================================================
-# FastAPI App
+# Flask App
 # ============================================================
 
-app = FastAPI()
+app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 
 
-class NoCacheStaticMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
+@app.after_request
+def add_headers(response):
+    if request.path in ("/", "/index") or request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = NO_CACHE
+        response.headers["Pragma"] = "no-cache"
 
-        if request.url.path in ("/", "/index") or request.url.path.startswith("/static/"):
-            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-            response.headers["Pragma"] = "no-cache"
+    # Allow pages served from elsewhere (e.g. DWC) to use the API.
+    response.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = request.headers.get("Access-Control-Request-Headers", "*")
+    response.headers.add("Vary", "Origin")
 
-        return response
+    return response
 
 
-app.add_middleware(NoCacheStaticMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@app.errorhandler(ValidationError)
+def invalid_request(error):
+    return {"status": "error", "errors": error.errors(include_url=False, include_context=False)}, 422
+
+
+def request_model(model):
+    """The JSON request body, checked against a pydantic model (ValidationError if invalid)."""
+    return model.model_validate(request.get_json(silent=True) or {})
 
 # ============================================================
 # Camera Manager
@@ -133,11 +134,27 @@ def set_camera_settings(configs, settings):
     camera_settings.update(settings)
 
 
-app.mount(
-    "/static",
-    StaticFiles(directory=str(STATIC_DIR)),
-    name="static",
-)
+def add_camera(config: dict):
+    """Register a camera (a config as returned by get_config.configure_cameras); start it with start_cameras."""
+    camera = CameraConfig.model_validate(config)
+    manager.add_camera(
+        name=camera.name,
+        source=camera.source,
+        fps=camera.fps,
+        capturefps=camera.capturefps,
+        width=camera.width,
+        height=camera.height,
+        api_preference=camera.api_preference,
+        rotate=camera.rotate,
+        jpegresolution=camera.jpegresolution,
+        cameratype=camera.cameratype,
+        format=camera.format,
+        controls=camera.controls,
+    )
+    camera_urls[camera.name] = {
+        "stream": camera.streamname,
+        "snapshot": camera.snapshotname,
+    }
 
 # ============================================================
 # Routes
@@ -145,12 +162,12 @@ app.mount(
 
 @app.get("/")
 @app.get("/index")
-async def root():
-    return FileResponse(STATIC_DIR / "index.html")
+def root():
+    return send_from_directory(STATIC_DIR, "index.html")
 
 
 @app.get("/api/cameras")
-async def list_cameras():
+def list_cameras():
     return {
         "cameras": [
             {
@@ -170,63 +187,49 @@ class CameraSettingRequest(BaseModel):
     value: float
 
 
-# Not async: changing a setting can restart the camera, which blocks, so FastAPI runs this in a worker thread.
+# Changing a setting can restart the camera, which blocks this request's thread only.
 @app.post("/api/camera-setting")
-def api_camera_setting(request: CameraSettingRequest):
+def api_camera_setting():
     # get_config needs logging set up, so it is imported once the server is running.
     from get_config import get_camera_settings, update_camera_setting
 
-    if request.name not in manager.cameras or request.name not in camera_configs:
-        return JSONResponse({"status": "error", "message": f"Unknown camera '{request.name}'"}, status_code=404)
+    setting_request = request_model(CameraSettingRequest)
+
+    if setting_request.name not in manager.cameras or setting_request.name not in camera_configs:
+        return {"status": "error", "message": f"Unknown camera '{setting_request.name}'"}, 404
 
     with camera_settings_lock:
-        old_config = camera_configs[request.name]
+        old_config = camera_configs[setting_request.name]
         try:
-            new_config, controls, restart = update_camera_setting(old_config, request.setting, request.value)
+            new_config, controls, restart = update_camera_setting(old_config, setting_request.setting, setting_request.value)
         except ValueError as e:
-            return JSONResponse({"status": "error", "message": str(e)}, status_code=400)
+            return {"status": "error", "message": str(e)}, 400
         except Exception as e:
-            logger_module.logger.error(f"[{request.name}] Could not change {request.setting}: {e}")
-            return JSONResponse({"status": "error", "message": f"Could not change {request.setting}: {e}"}, status_code=500)
+            logger_module.logger.error(f"[{setting_request.name}] Could not change {setting_request.setting}: {e}")
+            return {"status": "error", "message": f"Could not change {setting_request.setting}: {e}"}, 500
 
         try:
-            manager.update_camera(request.name, new_config, controls, restart)
+            manager.update_camera(setting_request.name, new_config, controls, restart)
         except Exception as e:
-            logger_module.logger.error(f"[{request.name}] Could not apply {request.setting}: {e}; restoring previous settings")
+            logger_module.logger.error(f"[{setting_request.name}] Could not apply {setting_request.setting}: {e}; restoring previous settings")
             try:
-                manager.update_camera(request.name, old_config, restart=restart)
+                manager.update_camera(setting_request.name, old_config, restart=restart)
             except Exception as restore_error:
-                logger_module.logger.error(f"[{request.name}] Could not restore previous settings: {restore_error}")
-            return JSONResponse({"status": "error", "message": f"Could not apply {request.setting}: {e}"}, status_code=500)
+                logger_module.logger.error(f"[{setting_request.name}] Could not restore previous settings: {restore_error}")
+            return {"status": "error", "message": f"Could not apply {setting_request.setting}: {e}"}, 500
 
-        camera_configs[request.name] = new_config
-        camera_settings.update(get_camera_settings({request.name: new_config}, startup_configs))
+        camera_configs[setting_request.name] = new_config
+        camera_settings.update(get_camera_settings({setting_request.name: new_config}, startup_configs))
 
-    return {"status": "success", "settings": camera_settings[request.name]}
+    return {"status": "success", "settings": camera_settings[setting_request.name]}
 
 
 @app.post("/api/add-camera")
-async def api_add_camera(config: CameraConfig):
+def api_add_camera():
+    config = request.get_json(silent=True) or {}
     try:
-        manager.add_camera(
-            name=config.name,
-            source=config.source,
-            fps=config.fps,
-            capturefps=config.capturefps,
-            width=config.width,
-            height=config.height,
-            api_preference=config.api_preference,
-            rotate=config.rotate,
-            jpegresolution=config.jpegresolution,
-            cameratype=config.cameratype,
-            format=config.format,
-            controls=config.controls,
-        )
-        camera_urls[config.name] = {
-            "stream": config.streamname,
-            "snapshot": config.snapshotname,
-        }
-        return {"status": "success", "name": config.name}
+        add_camera(config)
+        return {"status": "success", "name": config["name"]}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -236,10 +239,11 @@ class StartCameraRequest(BaseModel):
 
 
 @app.post("/api/start-camera")
-async def api_start_camera(request: StartCameraRequest):
+def api_start_camera():
+    start_request = request_model(StartCameraRequest)
     try:
-        manager.start_camera(request.name)
-        return {"status": "success", "name": request.name}
+        manager.start_camera(start_request.name)
+        return {"status": "success", "name": start_request.name}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -248,7 +252,7 @@ async def api_start_camera(request: StartCameraRequest):
 # MJPEG Streaming
 # ============================================================
 
-async def mjpeg_generator(request: Request, camera_name: str):
+def mjpeg_generator(camera_name: str):
     if camera_name not in manager.cameras:
         return
 
@@ -260,19 +264,16 @@ async def mjpeg_generator(request: Request, camera_name: str):
     logger_module.logger.debug(f"Client connected: {camera_name}")
     try:
         while True:
-            if await request.is_disconnected():
-                logger_module.logger.debug(f"Client disconnected: {camera_name}")
-                break
-
             try:
                 # Capture threads already limit output to the camera fps; only send new frames.
                 jpg_bytes, timestamp = manager.get_jpeg_with_timestamp(camera_name)
 
                 if jpg_bytes is None or timestamp == last_timestamp:
-                    await asyncio.sleep(0.01)
+                    time.sleep(0.01)
                     continue
                 last_timestamp = timestamp
 
+                # When the client disconnects, the server closes this generator here (GeneratorExit).
                 yield (
                     b"--frame\r\n"
                     b"Content-Type: image/jpeg\r\n"
@@ -289,24 +290,22 @@ async def mjpeg_generator(request: Request, camera_name: str):
                 break
     finally:
         manager.remove_client(camera_name)
+        logger_module.logger.debug(f"Client disconnected: {camera_name}")
 
 
-@app.get("/streaming/{camera_name}")
-async def stream_camera(request: Request, camera_name: str):
+@app.get("/streaming/<camera_name>")
+def stream_camera(camera_name: str):
     if camera_name not in manager.cameras:
         return {"error": f"Unknown camera '{camera_name}'"}
 
-    return StreamingResponse(
-        mjpeg_generator(request, camera_name),
-        media_type=(
-            "multipart/x-mixed-replace;"
-            " boundary=frame"
-        ),
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    return Response(
+        mjpeg_generator(camera_name),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": NO_CACHE},
     )
 
 
-async def camera_snapshot(camera_name: str):
+def camera_snapshot(camera_name: str):
     # The cached JPEG may be stale if nobody is streaming, so request a fresh one.
     requested_at = time.time()
     deadline = time.monotonic() + SNAPSHOT_TIMEOUT_SEC
@@ -318,26 +317,25 @@ async def camera_snapshot(camera_name: str):
                 break
             if time.monotonic() > deadline:
                 break
-            await asyncio.sleep(0.02)
+            time.sleep(0.02)
     finally:
         manager.remove_client(camera_name)
 
     if jpg_bytes is None:
         return {"error": f"Camera '{camera_name}' has no valid captured frame"}
 
-    return Response(content=jpg_bytes, media_type="image/jpeg")
+    return Response(jpg_bytes, mimetype="image/jpeg")
 
 
-
-# Declared last so fixed paths such as /api/cameras and /streaming/<camera> match first.
-@app.get("/{camera_name}/{endpoint}")
-async def camera_endpoint(request: Request, camera_name: str, endpoint: str):
+# Fixed paths such as /api/cameras and /streaming/<camera> take precedence over this one.
+@app.get("/<camera_name>/<endpoint>")
+def camera_endpoint(camera_name: str, endpoint: str):
     if camera_name not in manager.cameras:
         return {"error": f"Unknown camera '{camera_name}'"}
 
     urls = camera_urls[camera_name]
     if endpoint == urls["stream"]:
-        return await stream_camera(request, camera_name)
+        return stream_camera(camera_name)
     if endpoint == urls["snapshot"]:
-        return await camera_snapshot(camera_name)
+        return camera_snapshot(camera_name)
     return {"error": f"Unknown endpoint '{endpoint}' for camera '{camera_name}'"}
