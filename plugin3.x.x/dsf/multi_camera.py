@@ -8,18 +8,13 @@ Optimized for Linux webcam streaming.
 import cv2
 import time
 import threading
-import os
 
 from typing import Dict, Optional
 
-import logger_module
 
 
-NETWORK_TIMEOUT_MSEC = 10000
 # Accept a frame slightly early so source jitter doesn't halve the output rate.
 FRAME_DUE_TOLERANCE = 0.25
-# Seconds without a frame before a network source is reopened.
-RECONNECT_AFTER_SEC = 5.0
 
 
 def normalize_rotation(rotate) -> int:
@@ -87,13 +82,24 @@ def ensure_huffman_tables(jpg_bytes: bytes) -> bytes:
 	return jpg_bytes
 
 
+# A camera with no clients is stopped after this long, so a quick reconnect doesn't reopen it.
+IDLE_STOP_SEC = 5.0
+
+
 class ClientTracking:
-	"""Counts active consumers so capture threads only encode when someone is watching."""
+	"""
+	Counts active consumers. The camera is started when needed (ensure_running) and
+	stopped once nobody has been watching for IDLE_STOP_SEC; capture threads only
+	encode while someone is watching.
+	"""
 
 	def _init_clients(self):
+		self.name = None
 		self._clients = 0
 		self._clients_lock = threading.Lock()
 		self._has_clients = threading.Event()
+		# start, stop and reconfigure are called from different request threads.
+		self.state_lock = threading.RLock()
 
 	def add_client(self):
 		with self._clients_lock:
@@ -105,28 +111,47 @@ class ClientTracking:
 			self._clients = max(0, self._clients - 1)
 			if self._clients == 0:
 				self._has_clients.clear()
+				self._schedule_idle_stop()
+
+	def ensure_running(self):
+		"""Start the camera if it is stopped. Raises if it cannot be opened."""
+		with self.state_lock:
+			if not self.running:
+				print(f"Starting {self.name}")
+				self.start()
+		# Stop it again if no client follows (e.g. the request was abandoned).
+		with self._clients_lock:
+			if self._clients == 0:
+				self._schedule_idle_stop()
+
+	def _schedule_idle_stop(self):
+		timer = threading.Timer(IDLE_STOP_SEC, self._stop_if_idle)
+		timer.daemon = True
+		timer.start()
+
+	def _stop_if_idle(self):
+		# A client added after the check below calls ensure_running, which waits for
+		# state_lock and so restarts the camera after this stop.
+		with self.state_lock:
+			with self._clients_lock:
+				if self._clients:
+					return
+			if self.running:
+				print(f"Stopping {self.name} - no viewers")
+				self.stop()
 
 
 class CameraStream(ClientTracking):
 	"""
-	Single background camera stream.
+	Single background USB (V4L2) camera stream.
 	"""
-
-	# Guards the brief window where OPENCV_FFMPEG_CAPTURE_OPTIONS is set,
-	# a VideoCapture is opened, and the env var is restored. This env var
-	# is process-wide, not per-capture, so if camera startup is ever made
-	# concurrent (e.g. threaded), this lock keeps opens from stepping on
-	# each other. Safe (and unused) for sequential startup too.
-	_ffmpeg_env_lock = threading.Lock()
 
 	def __init__(
 		self,
 		source,
-		cameratype: Optional[str],
 		fps: float,
 		width: Optional[int],
 		height: Optional[int],
-		api_preference,
 		rotate: int,
 		jpegresolution: int,
 		format: Optional[str] = None,
@@ -134,7 +159,6 @@ class CameraStream(ClientTracking):
 	):
 
 		self.source = source
-		self.cameratype = cameratype
 
 		# fps is the rate served; the device can run faster (capturefps) and
 		# the capture loop drops frames to match fps.
@@ -144,8 +168,6 @@ class CameraStream(ClientTracking):
 
 		self.width = width
 		self.height = height
-
-		self.api_preference = api_preference
 
 		self.rotate = normalize_rotation(rotate)
 		self.jpegresolution = jpegresolution
@@ -166,26 +188,6 @@ class CameraStream(ClientTracking):
 
 		self._init_clients()
 
-	def _open_capture(self, backend, ffmpeg_opts, params):
-		"""Open a VideoCapture with per-camera ffmpeg options (see comment in start)."""
-
-		with CameraStream._ffmpeg_env_lock:
-
-			old_ffmpeg_opts = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS")
-
-			if ffmpeg_opts is not None:
-				os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = ffmpeg_opts
-			else:
-				os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
-
-			try:
-				return cv2.VideoCapture(self.source, backend, params)
-			finally:
-				if old_ffmpeg_opts is not None:
-					os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = old_ffmpeg_opts
-				else:
-					os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
-
 	def start(self):
 		"""
 		Start background capture thread.
@@ -194,74 +196,9 @@ class CameraStream(ClientTracking):
 		if self.running:
 			return
 
+		print(f"Opening {self.source} using V4L2")
 
-		is_network_source = (
-			self.cameratype == "STREAM"
-			and
-			isinstance(self.source, str)
-		)
-		is_rtsp_source = (
-			isinstance(self.source, str)
-			and self.source.startswith("rtsp://")
-		)
-		is_http_source = (
-			isinstance(self.source, str)
-			and (self.source.startswith("http://") or self.source.startswith("https://"))
-		)
-
-		logger_module.logger.debug(
-			f"Opening {self.source} "
-			f"using {'network backend' if is_network_source else 'V4L2'}"
-		)
-
-		#
-		# Open webcam
-		#
-		if self.api_preference:
-			backend = self.api_preference
-		elif isinstance(self.source, str):
-			if self.cameratype == "STREAM":
-				backend = cv2.CAP_ANY
-			else:
-				backend = cv2.CAP_V4L2
-
-		#
-		# FFmpeg capture options differ by source type:
-		# - RTSP: force TCP transport to avoid incomplete/corrupt packets
-		#   that UDP can produce.
-		# - HTTP/HTTPS: enable reconnect behavior, since IP cameras over
-		#   HTTP MJPEG drop connections more readily than RTSP.
-		#
-		# OPENCV_FFMPEG_CAPTURE_OPTIONS is a process-wide environment
-		# variable, not a per-VideoCapture setting. It's read once, at
-		# VideoCapture construction time, so we set it immediately before
-		# opening this camera and restore whatever was there immediately
-		# after. This keeps one camera's ffmpeg options from leaking into
-		# another camera opened later in the same process. The lock only
-		# needs to cover this narrow window; already-open captures are
-		# unaffected by later env var changes.
-		#
-		if is_rtsp_source:
-			ffmpeg_opts = "rtsp_transport;tcp"
-		elif is_http_source:
-			ffmpeg_opts = "reconnect;1|reconnect_streamed;1|reconnect_delay_max;2"
-		else:
-			ffmpeg_opts = None
-
-		# Timeouts only take effect when passed at open time.
-		if is_network_source:
-			params = [
-				cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, NETWORK_TIMEOUT_MSEC,
-				cv2.CAP_PROP_READ_TIMEOUT_MSEC, NETWORK_TIMEOUT_MSEC,
-			]
-		else:
-			params = []
-
-		self._open_args = (backend, ffmpeg_opts, params)
-		self._is_network = is_network_source
-		self._is_http = is_http_source
-
-		self.capture = self._open_capture(backend, ffmpeg_opts, params)
+		self.capture = cv2.VideoCapture(self.source, cv2.CAP_V4L2)
 
 		if not self.capture.isOpened():
 
@@ -270,73 +207,39 @@ class CameraStream(ClientTracking):
 				f"{self.source}"
 			)
 
-		if not is_network_source:
-			# MJPG and frame-size negotiation apply to local V4L2 devices.
-			# Sending these properties to an RTSP/FFmpeg capture can interfere
-			# with the codec selected by the network source.
-			fourcc_str = self.format if self.format else 'MJPG'
+		fourcc_str = self.format if self.format else 'MJPG'
+		self.capture.set(
+			cv2.CAP_PROP_FOURCC,
+			cv2.VideoWriter.fourcc(*fourcc_str)
+		)
+
+		if self.width is not None:
 			self.capture.set(
-				cv2.CAP_PROP_FOURCC,
-				cv2.VideoWriter.fourcc(*fourcc_str)
+				cv2.CAP_PROP_FRAME_WIDTH,
+				int(self.width)
 			)
 
-			if self.width is not None:
-				self.capture.set(
-					cv2.CAP_PROP_FRAME_WIDTH,
-					int(self.width)
-				)
+		if self.height is not None:
+			self.capture.set(
+				cv2.CAP_PROP_FRAME_HEIGHT,
+				int(self.height)
+			)
 
-			if self.height is not None:
-				self.capture.set(
-					cv2.CAP_PROP_FRAME_HEIGHT,
-					int(self.height)
-				)
-
-			if self.capturefps is not None:
-				self.capture.set(
-					cv2.CAP_PROP_FPS,
-					float(self.capturefps)
-				)
+		if self.capturefps is not None:
+			self.capture.set(
+				cv2.CAP_PROP_FPS,
+				float(self.capturefps)
+			)
 
 		#
-		# Attempt to apply supported camera properties.
-		# Some devices reject unsupported or unavailable controls;
-		# in that case, ignore the setting instead of failing startup.
-		#
-		# for prop, value in (
-		#     (cv2.CAP_PROP_BRIGHTNESS, float(self.brightness)),
-		#     (cv2.CAP_PROP_CONTRAST, float(self.contrast)),
-		#     (cv2.CAP_PROP_FOCUS, float(self.focus)),
-		# ):
-		#     try:
-		#         self.capture.set(prop, value)
-		#     except Exception:
-		#         logger_module.logger.debug(
-		#             f"Ignoring unsupported camera property {prop} for {self.source}"
-		#         )
-		#
-		# wb_temperature = getattr(cv2, "CAP_PROP_WB_TEMPERATURE", None)
-		# if wb_temperature is not None:
-		#     try:
-		#         self.capture.set(wb_temperature, float(self.balance))
-		#     except Exception:
-		#         logger_module.logger.debug(
-		#             f"Ignoring unsupported white balance setting for {self.source}"
-		#         )
-
-		#
-		# JPEG passthrough: serve the source's own JPEG without decoding
+		# JPEG passthrough: serve the camera's own MJPG frames without decoding
 		# or re-encoding. Only possible without rotation, which needs pixels.
-		# USB: CONVERT_RGB=0 returns the raw MJPG buffer.
-		# HTTP: CAP_PROP_FORMAT=-1 returns raw demuxed packets (JPEG for MJPEG streams).
+		# CONVERT_RGB=0 returns the raw MJPG buffer.
 		#
-		try_passthrough = self.rotate == 0 and (is_http_source or not is_network_source)
+		try_passthrough = self.rotate == 0
 
 		if try_passthrough:
-			if is_http_source:
-				self.capture.set(cv2.CAP_PROP_FORMAT, -1)
-			else:
-				self.capture.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+			self.capture.set(cv2.CAP_PROP_CONVERT_RGB, 0)
 
 		#
 		# Test frame capture
@@ -347,15 +250,10 @@ class CameraStream(ClientTracking):
 			self.passthrough = _is_jpeg(frame)
 
 			if not self.passthrough:
-				logger_module.logger.debug(
+				print(
 					f"{self.source} does not deliver JPEG; using decode/encode"
 				)
-				if is_http_source:
-					# Raw mode can't be switched off on an open capture.
-					self.capture.release()
-					self.capture = self._open_capture(backend, ffmpeg_opts, params)
-				else:
-					self.capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)
+				self.capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)
 				ok, frame = self.capture.read()
 
 		if not ok or frame is None:
@@ -372,7 +270,7 @@ class CameraStream(ClientTracking):
 			backend_name = self.capture.getBackendName()
 		except Exception:
 			backend_name = "unknown"
-		logger_module.logger.debug(
+		print(
 			f"Camera opened successfully using backend {backend_name}"
 			f"{' (JPEG passthrough)' if self.passthrough else ''}"
 		)
@@ -398,33 +296,15 @@ class CameraStream(ClientTracking):
 
 		return frame
 
-	def _reopen(self):
-		"""Reopen a network source after it stops delivering frames."""
-
-		logger_module.logger.warning(f"No frames from {self.source}; reconnecting")
-
-		self.capture.release()
-		self.capture = self._open_capture(*self._open_args)
-
-		if not self.capture.isOpened():
-			logger_module.logger.warning(f"Reconnect to {self.source} failed; will retry")
-			return
-
-		if self.passthrough and self._is_http:
-			self.capture.set(cv2.CAP_PROP_FORMAT, -1)
-
-		logger_module.logger.info(f"Reconnected to {self.source}")
-
 	def _update(self):
 		"""
 		Background frame capture loop.
 		"""
 
 		next_due = 0.0
-		last_frame_at = time.monotonic()
 
 		while self.running:
-			# Always grab so device/network buffers are drained and frames stay current.
+			# Always grab so device buffers are drained and frames stay current.
 			# grab() only dequeues; decoding happens in retrieve().
 
 			if self.capture is None:
@@ -434,13 +314,8 @@ class CameraStream(ClientTracking):
 
 			if not self.capture.grab():
 				# Failed/disconnected sources return immediately; avoid spinning.
-				if self._is_network and time.monotonic() - last_frame_at >= RECONNECT_AFTER_SEC:
-					self._reopen()
-					last_frame_at = time.monotonic()
 				time.sleep(0.1)
 				continue
-
-			last_frame_at = time.monotonic()
 
 			if not self._has_clients.is_set():
 				continue
@@ -476,14 +351,6 @@ class CameraStream(ClientTracking):
 				# Encoding failures should not stop the capture loop
 				pass
 
-	def get_jpeg(self):
-		"""
-		Return cached JPEG bytes for the latest frame.
-		"""
-
-		with self.lock:
-			return self.cached_jpeg
-
 	def get_jpeg_with_timestamp(self):
 		"""
 		Return cached JPEG bytes and the time they were captured.
@@ -508,23 +375,30 @@ class CameraStream(ClientTracking):
 			self.capture.release()
 			self.capture = None
 
-	def reconfigure(self, fps, width, height, rotate, capturefps=None):
+		# Don't serve a frame from this session after the next start.
+		with self.lock:
+			self.cached_jpeg = None
+
+	def reconfigure(self, fps, width, height, capturefps=None):
 		"""
 		Restart capture with new settings that can only be set when the device is opened.
 		Connected clients stay connected and receive frames again once capture restarts.
+		A stopped camera only keeps the settings for its next start.
 		"""
 
-		self.stop()
+		with self.state_lock:
+			was_running = self.running
+			self.stop()
 
-		self.fps = fps
-		self.capturefps = capturefps if capturefps is not None else fps
-		self.frame_interval = 1.0 / fps
-		self.width = width
-		self.height = height
-		self.rotate = normalize_rotation(rotate)
-		self.passthrough = False
+			self.fps = fps
+			self.capturefps = capturefps if capturefps is not None else fps
+			self.frame_interval = 1.0 / fps
+			self.width = width
+			self.height = height
+			self.passthrough = False
 
-		self.start()
+			if was_running:
+				self.start()
 
 
 class MultiCameraManager:
@@ -546,7 +420,6 @@ class MultiCameraManager:
 		fps: float,
 		width: Optional[int],
 		height: Optional[int],
-		api_preference,
 		rotate: int,
 		jpegresolution: int,
 		cameratype: Optional[str],
@@ -575,53 +448,25 @@ class MultiCameraManager:
 		else:
 			self.cameras[name] = CameraStream(
 				source=source,
-				cameratype=cameratype,
 				fps=fps,
 				width=width,
 				height=height,
-				api_preference=api_preference,
 				rotate=rotate,
 				jpegresolution=jpegresolution,
 				format=format,
 				capturefps=capturefps,
 			)
-
-	def start(self):
-		"""
-		Start all cameras.
-		"""
-
-		for name, cam in self.cameras.items():
-			try:
-				cam.start()
-			except Exception as exc:
-				logger_module.logger.warning(
-					f"Skipping camera '{name}' because it could not start: {exc}"
-				)
-
-	def start_camera(self, name: str):
-		"""
-		Start one camera.
-		"""
-
-		try:
-			self.cameras[name].start()
-		except Exception as exc:
-			logger_module.logger.warning(
-				f"Camera '{name}' could not start: {exc}"
-			)
+		self.cameras[name].name = name
 
 	def update_camera(self, name: str, config: dict, controls: Optional[dict] = None, restart: bool = False):
 		"""
 		Apply a changed camera config (see get_config.update_camera_setting) to a running camera.
 
 		controls are Picamera2 controls to apply now; restart restarts the
-		camera with the config's fps, width, height and rotate.
+		camera with the config's fps, width and height.
 		"""
 
 		cam = self.cameras[name]
-
-		cam.jpegresolution = config["jpegresolution"]
 
 		if controls:
 			cam.set_controls(controls)
@@ -631,22 +476,8 @@ class MultiCameraManager:
 				fps=config["fps"],
 				width=config.get("width"),
 				height=config.get("height"),
-				rotate=config["rotate"],
 				capturefps=config.get("capturefps"),
 			)
-
-	def get_jpeg(self, name: str):
-		"""
-		Retrieve latest cached JPEG bytes for a camera.
-		"""
-
-		if name not in self.cameras:
-
-			raise KeyError(
-				f"Unknown camera '{name}'"
-			)
-
-		return self.cameras[name].get_jpeg()
 
 	def get_jpeg_with_timestamp(self, name: str):
 		"""
@@ -661,26 +492,11 @@ class MultiCameraManager:
 
 		return self.cameras[name].get_jpeg_with_timestamp()
 
+	def ensure_running(self, name: str):
+		self.cameras[name].ensure_running()
+
 	def add_client(self, name: str):
 		self.cameras[name].add_client()
 
 	def remove_client(self, name: str):
 		self.cameras[name].remove_client()
-
-	def stop_camera(self, name: str):
-		"""
-		Stop one camera.
-		"""
-
-		if name in self.cameras:
-
-			self.cameras[name].stop()
-
-	def stop(self):
-		"""
-		Stop all cameras.
-		"""
-
-		for cam in self.cameras.values():
-
-			cam.stop()

@@ -12,7 +12,6 @@ Venv python install e.g.
 import os
 os.environ["LIBCAMERA_LOG_LEVELS"] = "*:ERROR"
 
-from pathlib import Path
 import sys
 
 import logging
@@ -24,9 +23,10 @@ import webbrowser
 
 from werkzeug.serving import make_server
 
-from routes import app, add_camera, start_cameras, set_camera_settings
+from routes import app, add_camera, set_camera_settings
 
-from logger_module import setup_log
+from get_config import (get_installed_cameras, get_detected_cameras, configure_cameras,
+						get_camera_settings)
 
 
 def port_in_use(ip_address, port):
@@ -44,8 +44,8 @@ def find_port(start_port=17800, max_tries=100):
 		s.connect(('10.255.255.255', 1))  # doesn't even have to be reachable
 		this_ip_address = s.getsockname()[0]
 	except Exception as e:
-		logger.critical(f'''Unknown error trying to get the local IP address''')
-		logger.critical(f'''{e}''')
+		print(f'''Unknown error trying to get the local IP address''')
+		print(f'''{e}''')
 		force_quit(1)
 	finally:
 		s.close()
@@ -55,35 +55,35 @@ def find_port(start_port=17800, max_tries=100):
 		if not port_in_use(this_ip_address, port):
 			break
 	else:
-		logger.critical(f'''No free port found between {start_port} and {start_port + max_tries - 1}''')
+		print(f'''No free port found between {start_port} and {start_port + max_tries - 1}''')
 		force_quit(1)
 
-	logger.info(f'''IP address {this_ip_address} with port {port} is available''')
+	print(f'''IP address {this_ip_address} with port {port} is available''')
 	return this_ip_address, port
 
 
 def open_browser(url):
 	#  Only with a desktop - otherwise (e.g. run by DSF) a text browser could take over the terminal
 	if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
-		logger.debug(f'''No display - not opening {url} in a browser''')
+		print(f'''No display - not opening {url} in a browser''')
 		return
 	try:
 		#  xdg-open uses the desktop's default browser; webbrowser has its own order of preference
 		if shutil.which('xdg-open'):
 			subprocess.Popen(['xdg-open', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 		elif not webbrowser.open(url):
-			logger.debug(f'''No browser available to open {url}''')
+			print(f'''No browser available to open {url}''')
 	except Exception as e:
-		logger.debug(f'''Could not open {url} in a browser - {e}''')
+		print(f'''Could not open {url} in a browser - {e}''')
 
 
 def force_quit(code):
-	logger.critical(f'''Terminating the program with exit code {code}''')
+	print(f'''Terminating the program with exit code {code}''')
 	sys.exit(code)
 
 def sig_handler(signum, frame):
 	signame = signal.Signals(signum).name
-	logger.info(f'Shutting down.  Recieved signal {signame} ({signum})')
+	print(f'Shutting down.  Recieved signal {signame} ({signum})')
 	force_quit(0)
 
 
@@ -97,19 +97,12 @@ if __name__ == "__main__":
 	progName = os.path.splitext(os.path.basename(sys.argv[0]))[0]
 	progVersion = '1.0.0'
 
-	LOGFILENAME = Path(__file__).parent / f"{progName}.log"
+	# Show each message straight away when output goes to a pipe or file
+	sys.stdout.reconfigure(line_buffering=True)
 
-	if not setup_log(progName,LOGFILENAME):
-		logger.error(f"Failed to setup logging to {LOGFILENAME}. Please ensure the file is writable.")
-		sys.exit(1)
-
-	from logger_module import logger # Need to import after setup_logging is called
 	# Werkzeug logs every request (each stream and snapshot); only show its problems
 	logging.getLogger('werkzeug').setLevel(logging.WARNING)
-	logger.info(f'''Log file for {progName} -- {progVersion}''')
-
-	from get_config import (get_installed_cameras, get_detected_cameras, configure_cameras,
-						get_camera_settings)
+	print(f'''{progName} -- {progVersion}''')
 
 	this_ip_address, PORT = find_port()
 
@@ -119,40 +112,33 @@ if __name__ == "__main__":
 		cameras_to_use, cameras_to_use_configs = get_detected_cameras(installed_cameras)
 		configured_cameras = configure_cameras(installed_cameras,cameras_to_use, cameras_to_use_configs)
 	except Exception as e:
-		logger.info(f'{e}')
+		print(f'{e}')
 		force_quit(1)
 
 	# Values shown on the index page
 	try:
 		set_camera_settings(configured_cameras, get_camera_settings(configured_cameras))
 	except Exception as e:
-		logger.warning(f'Index page will not show camera settings - {e}')
+		print(f'Index page will not show camera settings - {e}')
 		set_camera_settings(configured_cameras, {})
 
 	# Use case sensitive order based on keys
 	for camera_name, camera_settings in sorted(configured_cameras.items()):
 		try:
 			add_camera(camera_settings)
-			logger.info(f"Added {camera_name} with source '{camera_settings['source']}'")
+			print(f"Added {camera_name} with source '{camera_settings['source']}'")
 		except Exception as e:
-			logger.error(f"Error adding camera {camera_name}: {e}")
-
-	# Start all cameras after registration
-	try:
-		start_cameras()
-	except Exception as e:
-		logger.critical(f"{e}")
-		force_quit(1)
+			print(f"Error adding camera {camera_name}: {e}")
 
 	# Each request (e.g. each open stream) is handled in its own thread
 	try:
 		server = make_server(this_ip_address, PORT, app, threaded=True)
 	except Exception as e:
-		logger.critical(f'Could not start the web server on port {PORT} - {e}')
+		print(f'Could not start the web server on port {PORT} - {e}')
 		force_quit(1)
 
-	logger.info('-------------------------------------------------------\n')
-	logger.info(f"View cameras at http://{this_ip_address}:{PORT}\n")
+	print('-------------------------------------------------------\n')
+	print(f"View cameras at http://{this_ip_address}:{PORT}\n")
 
 	open_browser(f"http://{this_ip_address}:{PORT}")
 

@@ -12,10 +12,7 @@ data/
 .DS_Store
 not-in-use/
 *.sh
-multiCam.config
-multiCam.log
-settings.config.bak
-settings.config
+*.config
 *.log
 callgraph
 callgraph.png

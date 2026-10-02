@@ -104,10 +104,6 @@ class Picamera2Stream(ClientTracking):
                     self.cached_jpeg = jpg_bytes
                     self.timestamp = time.time()
 
-    def get_jpeg(self):
-        with self.lock:
-            return self.cached_jpeg
-
     def get_jpeg_with_timestamp(self):
         with self.lock:
             return self.cached_jpeg, self.timestamp
@@ -120,6 +116,9 @@ class Picamera2Stream(ClientTracking):
             self.picam2.stop()
             self.picam2.close()
             self.picam2 = None
+        # Don't serve a frame from this session after the next start.
+        with self.lock:
+            self.cached_jpeg = None
 
     def set_controls(self, controls):
         """Apply libcamera controls ({real_name: value}) now, and keep them for later restarts."""
@@ -127,14 +126,17 @@ class Picamera2Stream(ClientTracking):
         if self.picam2 is not None:
             self.picam2.set_controls(controls)
 
-    def reconfigure(self, fps, width, height, rotate, capturefps=None):
+    def reconfigure(self, fps, width, height, capturefps=None):
         """
         Restart the camera with new settings that can only be set when it is configured.
         Connected clients stay connected and receive frames again once it restarts.
+        A stopped camera only keeps the settings for its next start.
         """
-        self.stop()
-        self.fps = fps
-        self.width = width
-        self.height = height
-        self.rotate = normalize_rotation(rotate)
-        self.start()
+        with self.state_lock:
+            was_running = self.running
+            self.stop()
+            self.fps = fps
+            self.width = width
+            self.height = height
+            if was_running:
+                self.start()

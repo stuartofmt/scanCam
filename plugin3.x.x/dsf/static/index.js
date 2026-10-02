@@ -3,7 +3,6 @@ const DEFAULT_CAMERA = "Camera1";
 const CAMERA_TYPE_LABELS = {
     USB: "USB camera",
     PICAMERA: "Pi camera",
-    STREAM: "Network stream",
 };
 
 // Browsers allow only ~6 connections per host, and the <img> stream holds one open.

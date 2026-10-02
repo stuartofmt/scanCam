@@ -9,20 +9,10 @@ import copy
 from typing import Dict, List, Optional, Tuple
 
 from defaults import DefaultCameraSettings, AllowedOptions
-from logger_module import logger
-from multi_camera import normalize_rotation
 
 # --- CSI cameras via picamera2 ---
 from picamera2 import Picamera2
 
-global PORT, LOGLEVEL, CAMERAS
-# From https://gist.github.com/laywill/63d75b53e8a7a801d77f0dd2b97de54d
-class DictToClass:
-	def __init__(self, dictionary):
-		for key, value in dictionary.items():
-			if isinstance(value, dict):
-				value = DictToClass(value)
-			setattr(self, key, value)
 
 # ---------------------------------
 # USB FUNCTIONS
@@ -92,7 +82,7 @@ def _set_usb_ctrls(device_path, values):
 			text=True,
 		)
 	except FileNotFoundError:
-		logger.debug(
+		print(
 			"Error: 'v4l2-ctl' utility not found. Install it using 'sudo apt install v4l-utils'."
 		)
 		return set(values)
@@ -117,10 +107,10 @@ def _query_list_ctrls(device_path):
 			text=True,
 		)
 	except subprocess.CalledProcessError as e:
-		logger.debug(f"Error listing controls for {device_path}: {e.stderr}")
+		print(f"Error listing controls for {device_path}: {e.stderr}")
 		return {}
 	except FileNotFoundError:
-		logger.debug(
+		print(
 			"Error: 'v4l2-ctl' utility not found. Install it using 'sudo apt install v4l-utils'."
 		)
 		return {}
@@ -169,10 +159,10 @@ def _clamp(source, canonical_name, value, bounds):
 	max_val = bounds.get("max")
 
 	if min_val is not None and float(value) < float(min_val):
-		logger.debug(f"[{source}] {canonical_name}: value {value} below min {min_val}, clamping")
+		print(f"[{source}] {canonical_name}: value {value} below min {min_val}, clamping")
 		return min_val
 	if max_val is not None and float(value) > float(max_val):
-		logger.debug(f"[{source}] {canonical_name}: value {value} above max {max_val}, clamping")
+		print(f"[{source}] {canonical_name}: value {value} above max {max_val}, clamping")
 		return max_val
 	return value
 
@@ -254,7 +244,7 @@ def get_camera_options_usb(camera_name, source):
 		for canonical_name in AllowedOptions.__members__:
 			real_name = _resolve_real_name(canonical_name, all_controls.keys())
 			if real_name is None:
-				logger.debug(f"[{camera_name}] {canonical_name}: not present on this camera")
+				print(f"[{camera_name}] {canonical_name}: not present on this camera")
 				continue
 			reverse_lookup[real_name] = canonical_name
 
@@ -264,7 +254,7 @@ def get_camera_options_usb(camera_name, source):
 			if default_val is not None
 		}
 		failed = _set_usb_ctrls(source, defaults)
-		logger.debug(f"[{camera_name}] reset to defaults: {defaults}; not settable: {failed or 'none'}")
+		print(f"[{camera_name}] reset to defaults: {defaults}; not settable: {failed or 'none'}")
 
 		for real_name, (min_val, max_val, default_val) in all_controls.items():
 			if real_name not in defaults or real_name in failed:
@@ -330,7 +320,7 @@ def set_controls_usb(controls_by_source, camera_config_options=None):
 				continue
 			real_name = _resolve_real_name(canonical_name, all_real_controls)
 			if real_name is None:
-				logger.debug(f"[{source}] {canonical_name}: not present on this camera")
+				print(f"[{source}] {canonical_name}: not present on this camera")
 				continue
 
 			if camera_config_options:
@@ -339,7 +329,7 @@ def set_controls_usb(controls_by_source, camera_config_options=None):
 				value = bounds.get("default")
 
 			if value is None:
-				logger.debug(f"[{source}] {canonical_name}: no value to set, skipping")
+				print(f"[{source}] {canonical_name}: no value to set, skipping")
 				continue
 
 			# v4l2 controls are integers; config values arrive as floats.
@@ -349,10 +339,10 @@ def set_controls_usb(controls_by_source, camera_config_options=None):
 		failed = _set_usb_ctrls(source, {name: value for name, (_, value) in to_set.items()})
 		for real_name, (canonical_name, value) in to_set.items():
 			if real_name in failed:
-				logger.debug(f"[{source}] {canonical_name} ({real_name}) not settable")
+				print(f"[{source}] {canonical_name} ({real_name}) not settable")
 			else:
 				results[canonical_name] = value
-				logger.debug(f"[{source}] {canonical_name} ({real_name}): set to {value}")
+				print(f"[{source}] {canonical_name} ({real_name}): set to {value}")
 
 		results_by_source[source] = results
 
@@ -405,11 +395,11 @@ def _run_v4l2_ctl(source: str) -> Optional[str]:
 			timeout=5,
 		)
 	except (OSError, subprocess.TimeoutExpired) as exc:
-		logger.warning(f"Could not query {source} with v4l2-ctl: {exc}")
+		print(f"Could not query {source} with v4l2-ctl: {exc}")
 		return None
 
 	if result.returncode != 0 or not result.stdout.strip():
-		logger.warning(
+		print(
 			f"v4l2-ctl reported no formats for {source}: {result.stderr.strip()}"
 		)
 		return None
@@ -539,16 +529,16 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 			source = cam.get("source")
 			output = _run_v4l2_ctl(source)
 			if output is None:
-				logger.info(f"[{cam_name}] Skipping format validation for {source}")
+				print(f"[{cam_name}] Skipping format validation for {source}")
 				continue
 
 			formats = _parse_formats(output)
 
 			if not formats:
-				logger.warning(f"[{cam_name}] No formats parsed for {source}; skipping")
+				print(f"[{cam_name}] No formats parsed for {source}; skipping")
 				continue
 		except Exception as e:
-			logger.info(f'Format parsing{e}')
+			print(f'Format parsing{e}')
 			raise
 		try:
 			# --- Step 1: format ---
@@ -568,7 +558,7 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 				if chosen_format is None:
 					chosen_format = next(iter(formats))
 
-				logger.info(
+				print(
 					f"[{cam_name}] Format '{cam.get('format')}' not supported on "
 					f"{source}; Adjusting to '{chosen_format}'"
 				)
@@ -576,7 +566,7 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 			cam["format"] = chosen_format
 			resolutions = formats[chosen_format]
 		except Exception as e:
-			logger.info(f'Format setting{e}')
+			print(f'Format setting{e}')
 			raise
 		try:
 			# --- Step 2/3: resolution + fps ---
@@ -588,12 +578,12 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 			else:
 				chosen_wh = _next_lower_resolution(requested_wh, list(resolutions.keys()))
 				if chosen_wh is None:
-					logger.warning(
+					print(
 						f"[{cam_name}] No usable resolution found for format "
 						f"'{chosen_format}' on {source}; leaving as requested"
 					)
 					continue
-				logger.info(
+				print(
 					f"[{cam_name}] Resolution {requested_wh[0]}x{requested_wh[1]} not "
 					f"supported for '{chosen_format}' on {source}; Adjusting to "
 					f"{chosen_wh[0]}x{chosen_wh[1]}"
@@ -601,7 +591,7 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 
 			cam["width"], cam["height"] = chosen_wh
 		except Exception as e:
-			logger.info(f'Resolution setting{e}')
+			print(f'Resolution setting{e}')
 			raise
 
 		try:
@@ -612,7 +602,7 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 			else:
 				chosen_fps = _next_lower_fps(requested_fps, available_fps)
 				if chosen_fps is None:
-					logger.warning(
+					print(
 						f"[{cam_name}] No usable fps found at "
 						f"{chosen_wh[0]}x{chosen_wh[1]} for '{chosen_format}' on "
 						f"{source}; leaving fps as requested"
@@ -625,7 +615,7 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 					)
 				else:
 					fallback = f"falling back to {int(chosen_fps)}"
-				logger.info(
+				print(
 					f"[{cam_name}] fps {int(requested_fps)} not supported at "
 					f"{chosen_wh[0]}x{chosen_wh[1]} for '{chosen_format}' on "
 					f"{source}; {fallback}"
@@ -636,7 +626,7 @@ def validate_usb_camera_configs(cameras: Dict[str, dict], applied_options: Optio
 			cam["capturefps"] = chosen_fps
 			cam["fps"] = min(requested_fps, chosen_fps)
 		except Exception as e:
-			logger.info(f'FPS setting{e}')
+			print(f'FPS setting{e}')
 			raise
 	return adjusted
 
@@ -719,7 +709,7 @@ def get_camera_options_picam(camera_name, source):
 			modes[wh] = max(modes.get(wh, 0.0), float(mode["fps"]))
 
 		_PICAM_INFO_CACHE[source] = {"controls": controls, "modes": modes}
-		logger.debug(f'[{camera_name}] PI CONTROLS = {controls}')
+		print(f'[{camera_name}] PI CONTROLS = {controls}')
 
 	return {source: _PICAM_INFO_CACHE[source]["controls"]}
 
@@ -753,14 +743,14 @@ def set_controls_picam(controls_by_source, camera_config_options=None):
 				continue
 			bounds = controls.get(canonical_name)
 			if bounds is None:
-				logger.debug(f"[{source}] {canonical_name}: not present on this camera")
+				print(f"[{source}] {canonical_name}: not present on this camera")
 				continue
 
 			value = _clamp(source, canonical_name, value, bounds)
 			# Config values are floats; libcamera needs the control's own type (bool/int/float).
 			value = type(bounds["default"])(value)
 			resolved[CONTROL_NAME_MAP_PICAM[canonical_name]] = value
-			logger.debug(f"[{source}] {canonical_name}: will be set to {value}")
+			print(f"[{source}] {canonical_name}: will be set to {value}")
 
 		resolved_by_source[source] = resolved
 
@@ -799,11 +789,11 @@ def validate_pi_camera_configs(cameras: Dict[str, dict], applied_options: Option
 		try:
 			modes = _get_picam_sensor_modes(source)
 		except Exception as e:
-			logger.warning(f"[{cam_name}] Could not query sensor modes for camera {source}: {e}")
+			print(f"[{cam_name}] Could not query sensor modes for camera {source}: {e}")
 			continue
 
 		if not modes:
-			logger.warning(f"[{cam_name}] No sensor modes reported for camera {source}; skipping")
+			print(f"[{cam_name}] No sensor modes reported for camera {source}; skipping")
 			continue
 
 		requested_wh = (int(cam["width"]), int(cam["height"]))
@@ -817,7 +807,7 @@ def validate_pi_camera_configs(cameras: Dict[str, dict], applied_options: Option
 		else:
 			chosen_wh = _next_lower_resolution(requested_wh, list(modes.keys()))
 			covering = [chosen_wh]
-			logger.info(
+			print(
 				f"[{cam_name}] Resolution {requested_wh[0]}x{requested_wh[1]} exceeds "
 				f"the sensor on camera {source}; Adjusting to "
 				f"{chosen_wh[0]}x{chosen_wh[1]}"
@@ -829,7 +819,7 @@ def validate_pi_camera_configs(cameras: Dict[str, dict], applied_options: Option
 		# libcamera picks: the fastest mode large enough for the output.
 		max_fps = max(modes[wh] for wh in covering)
 		if requested_fps > max_fps:
-			logger.info(
+			print(
 				f"[{cam_name}] fps {int(requested_fps)} not supported at "
 				f"{chosen_wh[0]}x{chosen_wh[1]} on camera {source}; "
 				f"falling back to {int(max_fps)}"
@@ -867,7 +857,7 @@ def highlight_print(msg):
 	else:
 		highlight.append(msg)
 	highlight = highlight +  ["-" * 95, f'\n']
-	logger.info("\n".join(highlight))
+	print("\n".join(highlight))
 
 
 
@@ -927,7 +917,7 @@ def find_usb_cameras():
 			except CameraInUseError:
 				camera_results.append("   In use by another process")
 			except Exception as e:
-				logger.debug(f"Could not query options for {dev}: {e}")
+				print(f"Could not query options for {dev}: {e}")
 	else:
 		camera_results.append("No USB cameras were found.")
 
@@ -963,7 +953,7 @@ def find_pi_cameras():
 				except CameraInUseError:
 					camera_results.append("   In use by another process")
 				except Exception as e:
-					logger.debug(f"Could not query options for camera index {index}: {e}")
+					print(f"Could not query options for camera index {index}: {e}")
 		else:
 			camera_results.append("No Pi cameras found.")
 
@@ -1071,15 +1061,15 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 			# so the remaining cameras still start.
 			failed_cameras = set()
 			for name, details in camera_list.items():
-				if (details['source'] not in installed_cameras) and (details['cameratype'] != 'STREAM'):
-					logger.warning(f'Camera source {details['source']} is not installed')
+				if details['source'] not in installed_cameras:
+					print(f'Camera source {details['source']} is not installed')
 					continue
 
 				try:
-					# Get and set camera options for USB and Pi cameras - No need for streams
+					# Get and set camera options
 					if details['cameratype'] == 'USB':
 						camera_options = get_camera_options_usb(name,details['source'])
-						logger.debug(camera_options)
+						print(camera_options)
 						applied = set_controls_usb(camera_options,requested_options[name])
 						# With no options configured every control is set to its default; only report requested ones.
 						applied_options[name] = {
@@ -1090,7 +1080,7 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 
 					elif details['cameratype'] == 'PICAMERA':
 						camera_options = get_camera_options_picam(name,details['source'])
-						logger.debug(f'{camera_options=}')
+						print(f'{camera_options=}')
 						resolved = set_controls_picam(camera_options,requested_options[name])
 						applied_options[name] = {
 							PI_REAL_TO_CANONICAL[real_name]: value
@@ -1101,33 +1091,23 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 						if resolved[details['source']]:
 							camera_list[name]['controls'] = resolved[details['source']]
 
-					elif details['cameratype'] == 'STREAM':
-						logger.debug(f'Skipping camera controls for stream {name}')
-
 					else:
-						logger.warning(f'Unrecognized camera type {details['cameratype']}')
+						print(f'Unrecognized camera type {details['cameratype']}')
 						continue
 				except Exception as e:
-					logger.warning(f'[{name}] Could not set up camera {details['source']}; skipping it\nIs it being used by another process?.\nError reported was - {e}')
+					print(f'[{name}] Could not set up camera {details['source']}; skipping it\nIs it being used by another process?.\nError reported was - {e}')
 					failed_cameras.add(name)
 					continue
-				'''
-				camera_list[name].update({
-				key: value
-				for key, value in requested_options.items()
-				if key in DefaultCameraSettings.__members__
-				})
-				'''
 
 			# Remove any cameras that are not present or could not be set up
 			for camera, details in list(camera_list.items()):
-				if (details['source'] not in installed_cameras) and (details['cameratype'] != 'STREAM'):
+				if details['source'] not in installed_cameras:
 					camera_list.pop(camera)
-					logger.debug(f'Camera {camera} with source {details['source']} removed')
+					print(f'Camera {camera} with source {details['source']} removed')
 					continue
 				if camera in failed_cameras:
 					camera_list.pop(camera)
-					logger.debug(f'Camera {camera} with source {details['source']} removed')
+					print(f'Camera {camera} with source {details['source']} removed')
 					continue
 
 				# Validate this camera's format, resolution, and fps.
@@ -1139,7 +1119,7 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 						validated_camera = validate_pi_camera_configs({camera: details}, applied_options)
 						camera_list[camera] = validated_camera[camera]
 				except Exception as e:
-					logger.warning(f'[{camera}] Could not validate camera {details['source']}; skipping it - {e}')
+					print(f'[{camera}] Could not validate camera {details['source']}; skipping it - {e}')
 					camera_list.pop(camera)
 
 
@@ -1159,19 +1139,13 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 
 			return camera_list
 		except Exception as e:
-			logger.exception('Camera option setup failed')
+			print('Camera option setup failed')
 			raise Exception(f'Error setting camera options {e}') from e
 
 
 # ----------------------------------
 #  CAMERA SETTINGS FOR THE UI
 # ----------------------------------
-
-# Limits of settings that don't depend on the camera
-FIXED_SETTING_LIMITS = {
-	'jpegresolution': {'min': 1, 'max': 100},
-	'rotate': {'min': 0, 'max': 270},
-}
 
 # Pi cameras scale to any size and run at any rate up to the sensor's limits,
 # so these common values (that fit the sensor) are offered alongside its own modes.
@@ -1262,7 +1236,7 @@ def get_camera_settings(configured_cameras, startup_cameras=None):
 			try:
 				choices = _usb_setting_choices(cam)
 			except Exception as e:
-				logger.debug(f"[{name}] Could not read formats for {cam['source']}: {e}")
+				print(f"[{name}] Could not read formats for {cam['source']}: {e}")
 				choices = {}
 			options = _USB_OPTIONS_CACHE.get(cam["source"], {}).get(cam["source"], {})
 		elif cam["cameratype"] == "PICAMERA":
@@ -1302,7 +1276,7 @@ def get_camera_settings(configured_cameras, startup_cameras=None):
 
 
 # Settings fixed when a camera is opened, so changing one restarts the camera.
-RESTART_SETTINGS = ("fps", "width", "height", "rotate")
+RESTART_SETTINGS = ("fps", "width", "height")
 
 
 def _usb_resolution_with(cam, setting, value):
@@ -1359,7 +1333,7 @@ def update_camera_setting(cam, setting, value):
 			if setting not in applied:
 				raise ValueError(f"{name} did not accept {setting} (it may depend on another setting)")
 			new_cam[setting] = _cast_option(setting, applied[setting])
-			logger.info(f"[{name}] {setting} set to {new_cam[setting]}")
+			print(f"[{name}] {setting} set to {new_cam[setting]}")
 			return new_cam, {}, False
 
 		if cameratype == "PICAMERA":
@@ -1369,23 +1343,15 @@ def update_camera_setting(cam, setting, value):
 			resolved = set_controls_picam({source: options}, {setting: value})[source]
 			new_cam["controls"] = {**new_cam.get("controls", {}), **resolved}
 			new_cam[setting] = next(iter(resolved.values()))
-			logger.info(f"[{name}] {setting} set to {new_cam[setting]}")
+			print(f"[{name}] {setting} set to {new_cam[setting]}")
 			return new_cam, resolved, False
 
 		raise ValueError(f"{setting} cannot be changed on {name}")
 
-	if setting == "jpegresolution":
-		limits = FIXED_SETTING_LIMITS[setting]
-		new_cam[setting] = int(round(min(max(value, limits["min"]), limits["max"])))
-		logger.info(f"[{name}] {setting} set to {new_cam[setting]}")
-		return new_cam, {}, False
-
 	if setting not in RESTART_SETTINGS:
 		raise ValueError(f"{setting} cannot be changed")
 
-	if setting == "rotate":
-		new_cam["rotate"] = normalize_rotation(value)
-	elif setting == "fps":
+	if setting == "fps":
 		if value <= 0:
 			raise ValueError("fps must be greater than 0")
 		new_cam["fps"] = value
@@ -1404,6 +1370,6 @@ def update_camera_setting(cam, setting, value):
 	elif cameratype == "PICAMERA":
 		new_cam = validate_pi_camera_configs({name: new_cam})[name]
 
-	logger.info(f"[{name}] {setting} changed; restarting with "
-		f"{new_cam.get('width')}x{new_cam.get('height')} at {new_cam['fps']} fps, rotate {new_cam['rotate']}")
+	print(f"[{name}] {setting} changed; restarting with "
+		f"{new_cam.get('width')}x{new_cam.get('height')} at {new_cam['fps']} fps")
 	return new_cam, {}, True

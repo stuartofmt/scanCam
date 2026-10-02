@@ -11,7 +11,7 @@ from defaults import (
     DefaultCameraSettings,
 )
 from multi_camera import MultiCameraManager
-import logger_module
+from get_config import get_camera_settings, update_camera_setting
 
 
 # ============================================================
@@ -28,7 +28,6 @@ class CameraConfig(BaseModel):
     capturefps: Optional[float] = None
     width: Optional[int] = None
     height: Optional[int] = None
-    api_preference: Optional[int] = None
     rotate: int = 0
     jpegresolution: int = 95
     format: Optional[str] = None
@@ -41,21 +40,16 @@ class CameraConfig(BaseModel):
     @model_validator(mode="after")
     def validate_camera_type_settings(self):
         camera_type = self.cameratype.upper()
-        if camera_type in {"USB", "PICAMERA"}:
-            missing = [
-                field for field in ("fps", "width", "height")
-                if getattr(self, field) is None
-            ]
-            if missing:
-                raise ValueError(
-                    f"{camera_type} cameras require: {', '.join(missing)}"
-                )
-        elif camera_type == "STREAM":
-            self.fps = self.fps or DefaultCameraSettings.fps.value
-            self.width = None
-            self.height = None
-        else:
+        if camera_type not in {"USB", "PICAMERA"}:
             raise ValueError(f"Unsupported camera type: {self.cameratype}")
+        missing = [
+            field for field in ("fps", "width", "height")
+            if getattr(self, field) is None
+        ]
+        if missing:
+            raise ValueError(
+                f"{camera_type} cameras require: {', '.join(missing)}"
+            )
         return self
 
 
@@ -121,10 +115,6 @@ camera_settings = {}
 camera_settings_lock = threading.Lock()
 
 
-def start_cameras():
-    manager.start()
-
-
 def set_camera_settings(configs, settings):
     camera_configs.clear()
     camera_configs.update(configs)
@@ -135,7 +125,7 @@ def set_camera_settings(configs, settings):
 
 
 def add_camera(config: dict):
-    """Register a camera (a config as returned by get_config.configure_cameras); start it with start_cameras."""
+    """Register a camera (a config as returned by get_config.configure_cameras); it starts when first viewed."""
     camera = CameraConfig.model_validate(config)
     manager.add_camera(
         name=camera.name,
@@ -144,7 +134,6 @@ def add_camera(config: dict):
         capturefps=camera.capturefps,
         width=camera.width,
         height=camera.height,
-        api_preference=camera.api_preference,
         rotate=camera.rotate,
         jpegresolution=camera.jpegresolution,
         cameratype=camera.cameratype,
@@ -190,9 +179,6 @@ class CameraSettingRequest(BaseModel):
 # Changing a setting can restart the camera, which blocks this request's thread only.
 @app.post("/api/camera-setting")
 def api_camera_setting():
-    # get_config needs logging set up, so it is imported once the server is running.
-    from get_config import get_camera_settings, update_camera_setting
-
     setting_request = request_model(CameraSettingRequest)
 
     if setting_request.name not in manager.cameras or setting_request.name not in camera_configs:
@@ -205,47 +191,23 @@ def api_camera_setting():
         except ValueError as e:
             return {"status": "error", "message": str(e)}, 400
         except Exception as e:
-            logger_module.logger.error(f"[{setting_request.name}] Could not change {setting_request.setting}: {e}")
+            print(f"[{setting_request.name}] Could not change {setting_request.setting}: {e}")
             return {"status": "error", "message": f"Could not change {setting_request.setting}: {e}"}, 500
 
         try:
             manager.update_camera(setting_request.name, new_config, controls, restart)
         except Exception as e:
-            logger_module.logger.error(f"[{setting_request.name}] Could not apply {setting_request.setting}: {e}; restoring previous settings")
+            print(f"[{setting_request.name}] Could not apply {setting_request.setting}: {e}; restoring previous settings")
             try:
                 manager.update_camera(setting_request.name, old_config, restart=restart)
             except Exception as restore_error:
-                logger_module.logger.error(f"[{setting_request.name}] Could not restore previous settings: {restore_error}")
+                print(f"[{setting_request.name}] Could not restore previous settings: {restore_error}")
             return {"status": "error", "message": f"Could not apply {setting_request.setting}: {e}"}, 500
 
         camera_configs[setting_request.name] = new_config
         camera_settings.update(get_camera_settings({setting_request.name: new_config}, startup_configs))
 
     return {"status": "success", "settings": camera_settings[setting_request.name]}
-
-
-@app.post("/api/add-camera")
-def api_add_camera():
-    config = request.get_json(silent=True) or {}
-    try:
-        add_camera(config)
-        return {"status": "success", "name": config["name"]}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-class StartCameraRequest(BaseModel):
-    name: str
-
-
-@app.post("/api/start-camera")
-def api_start_camera():
-    start_request = request_model(StartCameraRequest)
-    try:
-        manager.start_camera(start_request.name)
-        return {"status": "success", "name": start_request.name}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 # ============================================================
@@ -261,8 +223,13 @@ def mjpeg_generator(camera_name: str):
 
     # Capture threads only encode while at least one client is registered.
     manager.add_client(camera_name)
-    logger_module.logger.debug(f"Client connected: {camera_name}")
+    print(f"Client connected: {camera_name}")
     try:
+        try:
+            manager.ensure_running(camera_name)
+        except Exception as e:
+            print(f"Could not start {camera_name}: {e}")
+            return
         while True:
             try:
                 # Capture threads already limit output to the camera fps; only send new frames.
@@ -284,19 +251,26 @@ def mjpeg_generator(camera_name: str):
 
                 frame_count += 1
                 if frame_count % 10000 == 0:  # periodic output
-                    logger_module.logger.debug(f"[{camera_name}] Streamed {frame_count} frames")
+                    print(f"[{camera_name}] Streamed {frame_count} frames")
             except Exception as e:
-                logger_module.logger.error(f"Error in mjpeg_generator for {camera_name}: {e}")
+                print(f"Error in mjpeg_generator for {camera_name}: {e}")
                 break
     finally:
         manager.remove_client(camera_name)
-        logger_module.logger.debug(f"Client disconnected: {camera_name}")
+        print(f"Client disconnected: {camera_name}")
 
 
 @app.get("/streaming/<camera_name>")
 def stream_camera(camera_name: str):
     if camera_name not in manager.cameras:
         return {"error": f"Unknown camera '{camera_name}'"}
+
+    # Started here as well so a camera that cannot open gets an error response.
+    try:
+        manager.ensure_running(camera_name)
+    except Exception as e:
+        print(f"Could not start {camera_name}: {e}")
+        return {"error": f"Could not start camera '{camera_name}': {e}"}, 503
 
     return Response(
         mjpeg_generator(camera_name),
@@ -311,6 +285,11 @@ def camera_snapshot(camera_name: str):
     deadline = time.monotonic() + SNAPSHOT_TIMEOUT_SEC
     manager.add_client(camera_name)
     try:
+        try:
+            manager.ensure_running(camera_name)
+        except Exception as e:
+            print(f"Could not start {camera_name}: {e}")
+            return {"error": f"Could not start camera '{camera_name}': {e}"}, 503
         while True:
             jpg_bytes, timestamp = manager.get_jpeg_with_timestamp(camera_name)
             if jpg_bytes is not None and timestamp >= requested_at:
