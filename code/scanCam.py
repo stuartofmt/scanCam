@@ -23,7 +23,7 @@ import webbrowser
 from werkzeug.serving import make_server
 
 from defaults import IS_WINDOWS
-from routes import app, add_camera, set_camera_settings, set_in_use_cameras
+from routes import app, add_camera, set_camera_settings, set_in_use_cameras, set_exit_on_page_close
 
 from camera_settings import get_camera_settings
 from config_common import highlight_print
@@ -171,4 +171,7 @@ if __name__ == "__main__":
 
 	open_browser(f"http://{this_ip_address}:{PORT}")
 
+	# Closing the last open page (not just hiding it) stops the server, ending serve_forever.
+	set_exit_on_page_close(server.shutdown)
 	server.serve_forever()
+	force_quit(0)

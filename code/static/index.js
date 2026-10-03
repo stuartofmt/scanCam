@@ -253,6 +253,18 @@ function uniqueStreamUrl(stream) {
 
 cameraSelect.addEventListener("change", () => showCamera(cameraSelect.value));
 
+// Tell scanCam when this page opens and closes; it exits once the last open page is closed.
+// pagehide fires when the tab is closed, reloaded or navigated away from - not when it is
+// hidden or loses focus. pageshow fires on load and when the page comes back from the back/forward cache.
+const PAGE_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+function reportPage(state) {
+    navigator.sendBeacon(`/api/page-${state}?id=${PAGE_ID}`);
+}
+
+window.addEventListener("pageshow", () => reportPage("opened"));
+window.addEventListener("pagehide", () => reportPage("closed"));
+
 document.addEventListener("visibilitychange", () => {
 
     if (document.hidden) {

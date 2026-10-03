@@ -114,6 +114,9 @@ class ClientTracking:
 				self._has_clients.clear()
 				self._schedule_idle_stop()
 
+	def has_clients(self):
+		return self._has_clients.is_set()
+
 	def ensure_running(self):
 		"""Start the camera if it is stopped. Raises if it cannot be opened."""
 		with self.state_lock:
@@ -502,6 +505,10 @@ class MultiCameraManager:
 
 	def add_client(self, name: str):
 		self.cameras[name].add_client()
+
+	def has_clients(self):
+		"""True if any camera is being streamed or snapshotted."""
+		return any(cam.has_clients() for cam in self.cameras.values())
 
 	def remove_client(self, name: str):
 		self.cameras[name].remove_client()

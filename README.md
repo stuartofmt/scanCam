@@ -45,4 +45,6 @@ Cameras that another program is using when scanCam starts are left alone and lis
 
 On Windows, scanCam uses every camera DirectShow lists, including virtual cameras such as OBS Virtual Camera. The first time it runs, Windows may ask whether to allow it through the firewall; allow it on private networks to view the cameras from other machines.
 
+Closing the scanCam page in the browser stops scanCam a few seconds later; switching to another tab or window, or minimising the browser, doesn't. With several pages open, it stops when the last one is closed, and not while a camera stream is still being viewed elsewhere (e.g. a stream link opened in its own tab, or in DWC). If no page is ever opened, it runs until stopped.
+
 Stop it with Ctrl+C.

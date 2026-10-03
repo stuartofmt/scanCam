@@ -220,6 +220,68 @@ def api_camera_setting():
 
 
 # ============================================================
+# Exit When The Page Is Closed
+# ============================================================
+
+# A closed page has this long to open again (a reload does) before the program exits.
+PAGE_CLOSED_GRACE_SEC = 5.0
+
+# ids of the index pages open in a browser (see index.js)
+open_pages = set()
+open_pages_lock = threading.Lock()
+
+# Called (from a timer thread) once the last open page has been closed; see set_exit_on_page_close.
+exit_handler = None
+exit_timer: Optional[threading.Timer] = None
+
+
+def set_exit_on_page_close(handler):
+    """Call handler once every open page has been closed and nothing else is streaming."""
+    global exit_handler
+    exit_handler = handler
+
+
+def _schedule_exit_check():
+    global exit_timer
+    if exit_timer is not None:
+        exit_timer.cancel()
+    exit_timer = threading.Timer(PAGE_CLOSED_GRACE_SEC, _exit_if_unused)
+    exit_timer.daemon = True
+    exit_timer.start()
+
+
+def _exit_if_unused():
+    with open_pages_lock:
+        if open_pages:
+            return
+        if manager.has_clients():
+            # Still being viewed elsewhere (e.g. a stream opened in its own tab, or DWC).
+            _schedule_exit_check()
+            return
+    print("The scanCam page was closed - exiting")
+    exit_handler()
+
+
+# The page reports these with navigator.sendBeacon, which sends a POST with no JSON body.
+@app.post("/api/page-opened")
+def api_page_opened():
+    with open_pages_lock:
+        open_pages.add(request.args.get("id", ""))
+        if exit_timer is not None:
+            exit_timer.cancel()
+    return "", 204
+
+
+@app.post("/api/page-closed")
+def api_page_closed():
+    with open_pages_lock:
+        open_pages.discard(request.args.get("id", ""))
+        if not open_pages and exit_handler is not None:
+            _schedule_exit_check()
+    return "", 204
+
+
+# ============================================================
 # MJPEG Streaming
 # ============================================================
 
