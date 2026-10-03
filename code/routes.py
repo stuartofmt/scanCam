@@ -11,7 +11,7 @@ from defaults import (
     DefaultCameraSettings,
 )
 from multi_camera import MultiCameraManager
-from get_config import get_camera_settings, update_camera_setting
+from camera_settings import get_camera_settings, update_camera_setting
 
 
 # ============================================================
@@ -108,7 +108,7 @@ camera_configs = {}
 # camera name -> config the camera started with, for the defaults shown on the index page
 startup_configs = {}
 
-# camera name -> [{"setting", "min", "max", "default", "current", "step", "choices"}] (see get_config.get_camera_settings)
+# camera name -> [{"setting", "min", "max", "default", "current", "step", "choices"}] (see camera_settings.get_camera_settings)
 camera_settings = {}
 
 # Settings changes are applied one at a time, as some restart the camera.

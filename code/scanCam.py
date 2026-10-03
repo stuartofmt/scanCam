@@ -25,41 +25,50 @@ from werkzeug.serving import make_server
 from defaults import IS_WINDOWS
 from routes import app, add_camera, set_camera_settings
 
-from get_config import (get_installed_cameras, get_detected_cameras, configure_cameras,
-						get_camera_settings)
+from camera_settings import get_camera_settings
+from get_config import get_installed_cameras, get_detected_cameras, configure_cameras
 
 
-def port_in_use(ip_address, port):
-	#  A successful connection means something is already listening there
+# Listen on every interface, so the cameras can be viewed on this machine
+# (localhost) as well as from the network.
+LISTEN_ADDRESS = '0.0.0.0'
+
+
+def port_free(port):
+	#  A port is free if it can be bound; another server on any interface would prevent that
 	with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-		sock.settimeout(1)
-		return sock.connect_ex((ip_address, port)) == 0
+		#  The web server sets SO_REUSEADDR too, so a port left in TIME_WAIT counts as free.
+		#  Not on Windows, where it would allow binding a port that is in use.
+		if not IS_WINDOWS:
+			sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		try:
+			sock.bind((LISTEN_ADDRESS, port))
+			return True
+		except OSError:
+			return False
 
 
-def find_port(start_port=17800, max_tries=100):
-	#  Get the local ip address
-	this_ip_address = ''
+def get_ip_address():
+	#  The address other machines on the network reach this one at
 	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	try:
 		s.connect(('10.255.255.255', 1))  # doesn't even have to be reachable
-		this_ip_address = s.getsockname()[0]
-	except Exception as e:
-		print(f'''Unknown error trying to get the local IP address''')
-		print(f'''{e}''')
-		force_quit(1)
+		return s.getsockname()[0]
+	except OSError:
+		print('No network found - the cameras can only be viewed on this machine')
+		return '127.0.0.1'
 	finally:
 		s.close()
 
+
+def find_port(start_port=17800, max_tries=100):
 	#  Use the first free port starting at start_port
 	for port in range(start_port, start_port + max_tries):
-		if not port_in_use(this_ip_address, port):
-			break
-	else:
-		print(f'''No free port found between {start_port} and {start_port + max_tries - 1}''')
-		force_quit(1)
-
-	print(f'''IP address {this_ip_address} with port {port} is available''')
-	return this_ip_address, port
+		if port_free(port):
+			print(f'''Port {port} is available''')
+			return port
+	print(f'''No free port found between {start_port} and {start_port + max_tries - 1}''')
+	force_quit(1)
 
 
 def open_browser(url):
@@ -105,7 +114,8 @@ if __name__ == "__main__":
 	logging.getLogger('werkzeug').setLevel(logging.WARNING)
 	print(f'''{progName} -- {progVersion}''')
 
-	this_ip_address, PORT = find_port()
+	this_ip_address = get_ip_address()
+	PORT = find_port()
 
 	# Use every detected camera with default settings
 	try:
@@ -133,13 +143,14 @@ if __name__ == "__main__":
 
 	# Each request (e.g. each open stream) is handled in its own thread
 	try:
-		server = make_server(this_ip_address, PORT, app, threaded=True)
+		server = make_server(LISTEN_ADDRESS, PORT, app, threaded=True)
 	except Exception as e:
 		print(f'Could not start the web server on port {PORT} - {e}')
 		force_quit(1)
 
 	print('-------------------------------------------------------\n')
-	print(f"View cameras at http://{this_ip_address}:{PORT}\n")
+	print(f"View cameras at http://{this_ip_address}:{PORT}")
+	print(f"or on this machine at http://localhost:{PORT}\n")
 
 	open_browser(f"http://{this_ip_address}:{PORT}")
 

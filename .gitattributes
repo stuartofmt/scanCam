@@ -1,5 +1,2 @@
-* export-ignore
-/README.md -export-ignore
-/plugin3.x.x -export-ignore
-/plugin3.x.x/* export-ignore
-/plugin3.x.x/*.zip -export-ignore
+# Shell scripts must keep Unix line endings, even in a Windows checkout.
+*.sh text eol=lf

@@ -37,7 +37,7 @@ or on Windows:
 run.bat
 ```
 
-The address to open is printed at startup, e.g. `View cameras at http://192.168.1.20:17800`. When started from a desktop session, it also opens in the default browser.
+The address to open is printed at startup, e.g. `View cameras at http://192.168.1.20:17800`. On the machine itself, `http://localhost:17800` also works. When started from a desktop session, it also opens in the default browser.
 
 Cameras are only opened while they are being viewed. On Linux, the user running scanCam needs access to `/dev/video*` (membership of the `video` group, the default on Raspberry Pi OS).
 

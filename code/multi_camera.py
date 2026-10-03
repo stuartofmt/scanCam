@@ -465,7 +465,7 @@ class MultiCameraManager:
 
 	def update_camera(self, name: str, config: dict, controls: Optional[dict] = None, restart: bool = False):
 		"""
-		Apply a changed camera config (see get_config.update_camera_setting) to a running camera.
+		Apply a changed camera config (see camera_settings.update_camera_setting) to a running camera.
 
 		controls are Picamera2 controls to apply now; restart restarts the
 		camera with the config's fps, width and height.
