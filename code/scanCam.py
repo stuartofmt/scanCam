@@ -23,9 +23,10 @@ import webbrowser
 from werkzeug.serving import make_server
 
 from defaults import IS_WINDOWS
-from routes import app, add_camera, set_camera_settings
+from routes import app, add_camera, set_camera_settings, set_in_use_cameras
 
 from camera_settings import get_camera_settings
+from config_common import highlight_print
 from get_config import get_installed_cameras, get_detected_cameras, configure_cameras
 
 
@@ -87,6 +88,20 @@ def open_browser(url):
 		print(f'''Could not open {url} in a browser - {e}''')
 
 
+CAMERA_TYPE_LABELS = {'USB': 'USB camera', 'PICAMERA': 'Pi camera'}
+
+
+def report_in_use_cameras(cameras):
+	#  Cameras skipped because another program had them open; they can be used after a restart
+	if not cameras:
+		return
+	lines = ['The following cameras are in use by another program and cannot be connected to at this time:']
+	for camera in cameras:
+		lines.append(f"   {CAMERA_TYPE_LABELS.get(camera['cameratype'], camera['cameratype'])} {camera['source']}")
+	lines.append('Close the other program and restart scanCam to use them.')
+	highlight_print(lines)
+
+
 def force_quit(code):
 	print(f'''Terminating the program with exit code {code}''')
 	sys.exit(code)
@@ -121,7 +136,7 @@ if __name__ == "__main__":
 	try:
 		installed_cameras = get_installed_cameras()
 		cameras_to_use, cameras_to_use_configs = get_detected_cameras(installed_cameras)
-		configured_cameras = configure_cameras(installed_cameras,cameras_to_use, cameras_to_use_configs)
+		configured_cameras, in_use_cameras = configure_cameras(installed_cameras,cameras_to_use, cameras_to_use_configs)
 	except Exception as e:
 		print(f'{e}')
 		force_quit(1)
@@ -140,6 +155,7 @@ if __name__ == "__main__":
 			print(f"Added {camera_name} with source '{camera_settings['source']}'")
 		except Exception as e:
 			print(f"Error adding camera {camera_name}: {e}")
+	set_in_use_cameras(in_use_cameras)
 
 	# Each request (e.g. each open stream) is handled in its own thread
 	try:
@@ -148,6 +164,7 @@ if __name__ == "__main__":
 		print(f'Could not start the web server on port {PORT} - {e}')
 		force_quit(1)
 
+	report_in_use_cameras(in_use_cameras)
 	print('-------------------------------------------------------\n')
 	print(f"View cameras at http://{this_ip_address}:{PORT}")
 	print(f"or on this machine at http://localhost:{PORT}\n")

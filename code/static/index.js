@@ -27,8 +27,12 @@ async function loadCameras() {
     }
 
     const names = Object.keys(cameras);
+    const inUse = data.in_use || [];
 
-    document.getElementById("empty-state").hidden = names.length > 0;
+    showInUseCameras(inUse);
+
+    // Cameras that are only busy have been detected, so don't say none were.
+    document.getElementById("empty-state").hidden = names.length > 0 || inUse.length > 0;
     document.getElementById("camera-view").hidden = names.length === 0;
 
     if (names.length === 0) {
@@ -42,6 +46,17 @@ async function loadCameras() {
 
     cameraSelect.value = names.includes(DEFAULT_CAMERA) ? DEFAULT_CAMERA : names[0];
     showCamera(cameraSelect.value);
+}
+
+// Cameras skipped at startup because another program is using them.
+function showInUseCameras(inUse) {
+    const list = document.getElementById("in-use-list");
+    list.replaceChildren(...inUse.map(camera => {
+        const item = document.createElement("li");
+        item.textContent = `${CAMERA_TYPE_LABELS[camera.cameratype] || camera.cameratype} ${camera.source}`;
+        return item;
+    }));
+    document.getElementById("in-use-notice").hidden = inUse.length === 0;
 }
 
 function showCamera(cameraName) {

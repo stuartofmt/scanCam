@@ -111,6 +111,9 @@ startup_configs = {}
 # camera name -> [{"setting", "min", "max", "default", "current", "step", "choices"}] (see camera_settings.get_camera_settings)
 camera_settings = {}
 
+# Cameras skipped at startup because another process is using them: [{"name", "source", "cameratype"}]
+in_use_cameras = []
+
 # Settings changes are applied one at a time, as some restart the camera.
 camera_settings_lock = threading.Lock()
 
@@ -122,6 +125,11 @@ def set_camera_settings(configs, settings):
     startup_configs.update(copy.deepcopy(configs))
     camera_settings.clear()
     camera_settings.update(settings)
+
+
+def set_in_use_cameras(cameras):
+    in_use_cameras.clear()
+    in_use_cameras.extend(cameras)
 
 
 def add_camera(config: dict):
@@ -166,7 +174,8 @@ def list_cameras():
                 "settings": camera_settings.get(name, []),
             }
             for name in manager.cameras
-        ]
+        ],
+        "in_use": in_use_cameras,
     }
 
 

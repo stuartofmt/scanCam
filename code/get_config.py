@@ -5,7 +5,7 @@ The details live in usb_config.py and pi_config.py; camera_settings.py
 handles the settings shown and changed in the web page.
 """
 
-from config_common import highlight_print
+from config_common import CameraInUseError, highlight_print
 from defaults import DefaultCameraSettings
 from pi_config import (PI_REAL_TO_CANONICAL, find_pi_cameras, get_camera_options_picam,
 						set_controls_picam, validate_pi_camera_configs)
@@ -86,9 +86,12 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 				camera name.
 
 		Returns:
-			camera_list with USB and Pi cameras that are not installed, or that
-			could not be set up (e.g. busy in another process), removed, and the remaining settings adjusted to their actual values. Pi
-			cameras with configured options also get a 'controls' entry.
+			(camera_list, in_use_cameras). camera_list has USB and Pi cameras that
+			are not installed, or that could not be set up (e.g. busy in another
+			process), removed, and the remaining settings adjusted to their actual
+			values. Pi cameras with configured options also get a 'controls' entry.
+			in_use_cameras lists the cameras skipped because another process is
+			using them, as {"name", "source", "cameratype"}.
 			The actual settings are logged.
 		"""
 			# Assemble the camera configurations
@@ -98,6 +101,8 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 			# Cameras that could not be set up (e.g. busy in another process); removed below
 			# so the remaining cameras still start.
 			failed_cameras = set()
+			# The failed cameras that are busy in another process, reported to the user.
+			in_use_cameras = []
 			for name, details in camera_list.items():
 				if details['source'] not in installed_cameras:
 					print(f'Camera source {details["source"]} is not installed')
@@ -130,8 +135,13 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 					else:
 						print(f'Unrecognized camera type {details["cameratype"]}')
 						continue
+				except CameraInUseError:
+					print(f'[{name}] Camera {details["source"]} is in use by another process; skipping it')
+					failed_cameras.add(name)
+					in_use_cameras.append({key: details[key] for key in ("name", "source", "cameratype")})
+					continue
 				except Exception as e:
-					print(f'[{name}] Could not set up camera {details["source"]}; skipping it\nIs it being used by another process?.\nError reported was - {e}')
+					print(f'[{name}] Could not set up camera {details["source"]}; skipping it - {e}')
 					failed_cameras.add(name)
 					continue
 
@@ -173,7 +183,7 @@ def configure_cameras(installed_cameras,camera_list,requested_options):
 
 			highlight_print(camera_results)
 
-			return camera_list
+			return camera_list, in_use_cameras
 		except Exception as e:
 			print('Camera option setup failed')
 			raise Exception(f'Error setting camera options {e}') from e

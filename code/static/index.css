@@ -106,6 +106,17 @@ body {
     text-align: center;
 }
 
+.in-use-notice {
+    margin-bottom: 20px;
+    color: #ccc;
+    line-height: 1.5;
+}
+
+.in-use-notice ul {
+    margin: 6px 0 6px 24px;
+    color: #fff;
+}
+
 .camera-select {
     display: flex;
     align-items: center;
