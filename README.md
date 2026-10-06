@@ -22,7 +22,9 @@ The first install needs internet access, to download the Python packages listed 
 
 ### Installing
 
-Unzip the release and run `install.py` in the unzipped `scanCam` folder:
+Download `scanCam-<version>.zip` from the **Assets** of the latest release on the [Releases page](https://github.com/stuartofmt/scanCam/releases). Don't use the "Source code" zip or tar.gz there, or a clone of the repository.
+
+Unzip it and run `install.py` in the unzipped `scanCam` folder:
 
 ```bash
 unzip scanCam-<version>.zip
