@@ -4,7 +4,25 @@ View the USB and Raspberry Pi cameras attached to a Linux or Windows machine in 
 
 ## Install
 
-### Linux
+### What the computer needs first
+
+`install.py` installs scanCam's Python packages into its own venv, but nothing system-wide. It doesn't use `sudo`, so install these yourself first:
+
+- **Linux / Raspberry Pi OS**:
+
+  ```bash
+  sudo apt install python3-venv v4l-utils
+  ```
+
+  `v4l-utils` provides `v4l2-ctl`, which scanCam uses for USB cameras. On a Raspberry Pi, Raspberry Pi OS already includes the camera packages (`python3-picamera2`, `python3-libcamera`), and the venv uses them as they are. On a stripped-down system, add them with `sudo apt install python3-picamera2`. To choose the install folder in a window rather than typing it, you also need `python3-tk`, which Raspberry Pi OS Desktop already has.
+
+- **Windows**: Python 3.10 or later from [python.org](https://www.python.org/downloads/). Its installer includes everything `install.py` needs.
+
+The first install needs internet access, to download the Python packages listed in `requirements.txt`.
+
+### Installing
+
+Unzip the release and run `install.py` in the unzipped `scanCam` folder:
 
 ```bash
 unzip scanCam-<version>.zip
@@ -12,20 +30,36 @@ cd scanCam
 python3 install.py
 ```
 
-### Windows
-
-Install Python 3.10 or later from [python.org](https://www.python.org/downloads/), then unzip `scanCam-<version>.zip` and, in a Command Prompt:
+On Windows, unzip `scanCam-<version>.zip` and, in a Command Prompt:
 
 ```bat
 cd scanCam
 py install.py
 ```
 
-`install.py` asks which directory to install scanCam into (default `~/scanCam`, or `%USERPROFILE%\scanCam` on Windows; press Enter to accept it) and copies `README.md` and the `code` folder there. On Linux it then installs any missing system packages (`v4l-utils`, and `python3-picamera2` / `python3-libcamera` on a Raspberry Pi) using `sudo apt-get`. Finally it creates a Python venv and a launcher (`run.sh`, or `run.bat` on Windows) in that directory. Running it again updates the program files and recreates the venv.
+`install.py` then:
+
+1. **Asks where to install scanCam.**
+   - **On a desktop**, a folder window opens. Go to where you want to install and press OK: a `scanCam` folder is made there. To install over an earlier install, pick its `scanCam` folder. To name the folder yourself, type its full path in the **Selection** box: a folder that doesn't exist yet is created and used as typed. You then confirm the final path.
+   - **Over SSH, without a screen, or without tkinter**, it asks in the terminal instead. Press Enter to accept the default, `~/scanCam` (`%USERPROFILE%\scanCam` on Windows).
+2. **Copies** `README.md` and the `code` folder there.
+3. **Creates scanCam's venv** in that folder and installs `requirements.txt` into it with the venv's own pip. On Linux, the venv can also use Python packages installed on the system, such as `picamera2`.
+4. **Adds a launcher**: `run.sh`, or `run.bat` on Windows.
+5. **Starts scanCam** straight away, once everything has installed.
+
+Options:
+
+```bash
+python3 install.py /home/pi/scanCam   # install into this folder, without asking
+python3 install.py --no-gui           # ask for the folder in the terminal, not in a window
+python3 install.py --no-run           # install without starting scanCam
+```
+
+Running `install.py` again updates the program files and recreates the venv. If the install fails, the terminal shows why (and so does a message box, if you chose the folder in a window). The two usual causes are a missing `python3-venv` and no internet access.
 
 ## Run
 
-From the install directory:
+`install.py` starts scanCam when it finishes installing. After that, start it from the install directory:
 
 ```bash
 ./run.sh

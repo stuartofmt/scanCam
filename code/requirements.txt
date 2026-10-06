@@ -1,5 +1,7 @@
 flask
+werkzeug
 numpy
 opencv-python-headless
 pydantic
 pygrabber; sys_platform == "win32"
+comtypes; sys_platform == "win32"
