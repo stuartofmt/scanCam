@@ -5,62 +5,104 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Camera Streams</title>
 
+    <link rel="stylesheet" href="/static/vendor/vuetify.min.css">
+    <link rel="stylesheet" href="/static/vendor/mdi.css">
     <link rel="stylesheet" href="/static/index.css">
 </head>
 <body>
 
-    <div class="container">
+    <div id="app"></div>
 
-        <header class="page-header">
-            <h1>Camera Streams</h1>
-        </header>
+    <!-- The page's Vue template; index.js mounts it. Vue and Vuetify are in vendor (see update_vendor.py). -->
+    <script type="text/x-template" id="page">
+    <v-app>
+        <v-app-bar color="primary" density="comfortable" flat>
+            <v-app-bar-title>Camera Streams</v-app-bar-title>
+        </v-app-bar>
 
-        <div id="empty-state" class="camera-card empty-state" hidden>No cameras detected.</div>
+        <v-main>
+            <v-container fluid>
 
-        <div id="in-use-notice" class="camera-card in-use-notice" hidden>
-            <p>The following cameras are in use by another program and cannot be connected to at this time:</p>
-            <ul id="in-use-list"></ul>
-            <p>Close the other program and restart scanCam to use them.</p>
-        </div>
+                <v-alert v-if="loaded && !names.length && !inUse.length" variant="tonal" icon="mdi-camera-off"
+                         text="No cameras detected."></v-alert>
 
-        <div id="camera-view" class="camera-view" hidden>
+                <v-alert v-if="inUse.length" type="warning" variant="tonal" class="mb-4">
+                    <p>The following cameras are in use by another program and cannot be connected to at this time:</p>
+                    <ul class="in-use-list">
+                        <li v-for="camera in inUse" :key="camera.name">{{ typeLabel(camera.cameratype) }} {{ camera.source }}</li>
+                    </ul>
+                    <p>Close the other program and restart scanCam to use them.</p>
+                </v-alert>
 
-            <div class="settings-panel">
+                <!-- Settings on the left, stream on the right, so the effect of a change is visible as it is made.
+                     Too narrow for both side by side: stream first, settings below. -->
+                <v-row v-show="names.length">
 
-                <div class="camera-select">
-                    <label for="camera-select">Camera</label>
-                    <select id="camera-select"></select>
-                    <span id="camera-type" class="camera-type"></span>
-                </div>
+                    <v-col cols="12" md="auto" class="order-last order-md-first">
 
-                <table class="settings-table">
-                    <thead>
-                        <tr>
-                            <th>Setting</th>
-                            <th>Min / Max</th>
-                            <th>Default</th>
-                            <th>Current</th>
-                        </tr>
-                    </thead>
-                    <tbody id="settings-body"></tbody>
-                </table>
+                        <div class="d-flex align-center ga-4 mb-4">
+                            <v-select v-model="selected" :items="names" label="Camera" hide-details
+                                      class="camera-select" @update:model-value="showCamera"></v-select>
+                            <span class="text-medium-emphasis">{{ selectedCamera ? typeLabel(selectedCamera.cameratype) : "" }}</span>
+                        </div>
 
-                <p id="settings-status" class="settings-status" aria-live="polite"></p>
+                        <v-table density="compact" class="settings-table rounded-lg">
+                            <thead>
+                                <tr>
+                                    <th>Setting</th>
+                                    <th>Min / Max</th>
+                                    <th>Default</th>
+                                    <th>Current</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-if="!settings.length">
+                                    <td colspan="4" class="text-center text-medium-emphasis">No settings available.</td>
+                                </tr>
+                                <tr v-for="setting in settings" :key="setting.setting">
+                                    <td>{{ setting.setting }}</td>
+                                    <td>{{ formatValue(setting.min) }} / {{ formatValue(setting.max) }}</td>
+                                    <td>{{ formatValue(setting.default) }}</td>
+                                    <td>
+                                        <v-select v-if="setting.choices" v-model="values[setting.setting]" :aria-label="setting.setting"
+                                                  :items="setting.choices.map(choice => ({title: formatValue(choice), value: choice}))"
+                                                  density="compact" variant="outlined" hide-details class="setting-input"
+                                                  @update:model-value="selectChanged(setting)"></v-select>
+                                        <v-text-field v-else v-model="values[setting.setting]" :aria-label="setting.setting" type="number"
+                                                      :step="setting.step === null ? 'any' : setting.step"
+                                                      :min="setting.min ?? undefined" :max="setting.max ?? undefined"
+                                                      density="compact" variant="outlined" hide-details class="setting-input"
+                                                      @update:model-value="numberTyped(setting)"
+                                                      @update:focused="isFocused => isFocused ? focused = setting.setting : numberDone(setting)"
+                                                      @keydown.enter="numberDone(setting)"></v-text-field>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </v-table>
 
-            </div>
+                        <p :class="['settings-status', 'mt-2', {'text-error': status.error}]" aria-live="polite">{{ status.text }}</p>
 
-            <div class="camera-card camera-display">
-                <img id="camera-stream" alt="">
-                <div class="camera-links">
-                    <a id="stream-link" target="_blank" rel="noopener noreferrer"></a>
-                    <a id="snapshot-link" target="_blank" rel="noopener noreferrer"></a>
-                </div>
-            </div>
+                    </v-col>
 
-        </div>
+                    <v-col cols="12" md class="camera-display">
+                        <v-card class="pa-3" rounded="lg">
+                            <img ref="streamImage" :alt="selected" class="stream">
+                            <div class="d-flex flex-column ga-1 mt-3 camera-links">
+                                <a :href="streamUrl" target="_blank" rel="noopener noreferrer">Stream: {{ streamUrl }}</a>
+                                <a :href="snapshotUrl" target="_blank" rel="noopener noreferrer">Snapshot: {{ snapshotUrl }}</a>
+                            </div>
+                        </v-card>
+                    </v-col>
 
-    </div>
+                </v-row>
 
+            </v-container>
+        </v-main>
+    </v-app>
+    </script>
+
+    <script src="/static/vendor/vue.global.prod.js"></script>
+    <script src="/static/vendor/vuetify.min.js"></script>
     <script src="/static/index.js"></script>
 
 </body>

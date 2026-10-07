@@ -84,3 +84,7 @@ On Windows, scanCam uses every camera DirectShow lists, including virtual camera
 Closing the scanCam page in the browser stops scanCam a few seconds later; switching to another tab or window, or minimising the browser, doesn't. With several pages open, it stops when the last one is closed, and not while a camera stream is still being viewed elsewhere (e.g. a stream link opened in its own tab, or in DWC). If no page is ever opened, it runs until stopped.
 
 Stop it with Ctrl+C.
+
+## Web page
+
+The page is built with Vue 3 and Vuetify 4, which are kept in `code/static/vendor` (they go into the release zip, so scanCam needs no internet access and no Node.js). To update them, change the versions at the top of `update_vendor.py` and run `python3 update_vendor.py`; run it again after using a new `mdi-...` icon in the page, as only the icons in use are kept.

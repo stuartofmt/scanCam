@@ -70,7 +70,10 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 
 @app.after_request
 def add_headers(response):
-    if request.path in ("/", "/index") or request.path.startswith("/static/"):
+    if request.path.startswith("/static/vendor/"):
+        # Vue, Vuetify and the icons (see update_vendor.py) only change with a new release.
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    elif request.path in ("/", "/index") or request.path.startswith("/static/"):
         response.headers["Cache-Control"] = NO_CACHE
         response.headers["Pragma"] = "no-cache"
 
